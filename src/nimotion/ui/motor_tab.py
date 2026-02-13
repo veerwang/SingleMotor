@@ -9,6 +9,7 @@ from .motor_alarm import MotorAlarmPanel
 from .motor_control import MotorControlPanel
 from .motor_params import MotorParamsPanel
 from .motor_status import MotorStatusPanel
+from .turret_panel import TurretPanel
 
 
 class MotorTab(QWidget):
@@ -36,5 +37,8 @@ class MotorTab(QWidget):
         )
         self._sub_tabs.addTab(
             MotorAlarmPanel(self._motor), "报警信息"
+        )
+        self._sub_tabs.addTab(
+            TurretPanel(self._motor), "物镜转换"
         )
         layout.addWidget(self._sub_tabs, stretch=1)
