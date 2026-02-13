@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '[提醒] 请先用 Read 工具阅读 SESSION.md 和 TODO.md，然后汇报：1) 上次进度 2) 当前任务 3) 待办事项'"
+          }
+        ]
+      }
+    ]
+  }
+}
