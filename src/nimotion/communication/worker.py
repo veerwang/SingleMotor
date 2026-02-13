@@ -5,9 +5,12 @@
 
 from __future__ import annotations
 
+import logging
 import time
 
 from PyQt5.QtCore import QMutex, QThread, QWaitCondition, pyqtSignal
+
+logger = logging.getLogger(__name__)
 
 from ..models.types import ModbusRequest, ModbusResponse
 from .modbus_rtu import ModbusRTU
@@ -119,9 +122,11 @@ class CommWorker(QThread):
                         self._rx_bytes += len(incoming)
                         self.raw_data_received.emit(incoming)
                         self.bytes_count_updated.emit(self._tx_bytes, self._rx_bytes)
-            except Exception:
+            except Exception as exc:
+                logger.exception("通讯线程异常")
                 if self._running:
                     self._serial.close()
+                    self.connection_error.emit(f"通讯异常: {exc}")
                     self.disconnected.emit()
                     self._running = False
 
@@ -136,8 +141,10 @@ class CommWorker(QThread):
         """发送 Modbus 请求并等待响应"""
         frame = self._modbus.build_frame(request)
         self._serial.flush_input()
-        self._serial.write(frame)
-        self._tx_bytes += len(frame)
+        written = self._serial.write(frame)
+        self._tx_bytes += written
+        if written != len(frame):
+            logger.warning("串口写入不完整: 期望 %d 字节, 实际 %d", len(frame), written)
         self.raw_data_sent.emit(frame)
 
         time.sleep(self.MIN_FRAME_GAP)

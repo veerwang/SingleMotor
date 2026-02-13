@@ -110,11 +110,12 @@ class MotorAlarmPanel(QWidget):
         if address == 0x0026:
             self._update_alarm_display(value)
         elif address == 0x0027:
-            # 报警个数
-            self._alarm_count = value
+            # 报警个数（硬件最多 8 条历史报警: 0x0028~0x002F）
+            count = min(value, 8)
+            self._alarm_count = count
             # 读取每个历史报警
-            self._table.setRowCount(value)
-            for i in range(value):
+            self._table.setRowCount(count)
+            for i in range(count):
                 self._motor.read_param(0x0028 + i, 1)
         elif 0x0028 <= address <= 0x002F:
             # 历史报警值

@@ -193,6 +193,8 @@ class MotorService(QObject):
             self._parse_status(resp)
         elif resp.function_code == FunctionCode.READ_HOLDING:
             # 逐个发出 param_read 信号
+            if not resp.raw_tx or len(resp.raw_tx) < 4:
+                return
             start_addr = (resp.raw_tx[2] << 8) | resp.raw_tx[3]
             for i, val in enumerate(resp.values):
                 self.param_read.emit(start_addr + i, val)
@@ -253,4 +255,6 @@ class MotorService(QObject):
             return "CRC 校验失败"
         if resp.error_code == -2:
             return "通讯超时"
+        if resp.error_code == -3:
+            return "响应帧不完整"
         return f"Modbus 异常: {get_exception_text(resp.error_code)}"

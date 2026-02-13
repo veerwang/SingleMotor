@@ -238,8 +238,12 @@ class ModbusTab(QWidget):
 
     def _fill_table(self, resp: ModbusResponse) -> None:
         """填充结果表格"""
-        start_addr = (resp.raw_tx[2] << 8) | resp.raw_tx[3] if resp.raw_tx else 0
-        fc = resp.raw_tx[1] if resp.raw_tx else 0x03
+        if resp.raw_tx and len(resp.raw_tx) >= 4:
+            start_addr = (resp.raw_tx[2] << 8) | resp.raw_tx[3]
+            fc = resp.raw_tx[1]
+        else:
+            start_addr = 0
+            fc = 0x03
         reg_type = (
             RegisterType.INPUT
             if fc == FunctionCode.READ_INPUT

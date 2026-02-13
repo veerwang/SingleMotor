@@ -73,6 +73,17 @@ class ModbusRTU:
 
         返回: ModbusResponse
         """
+        # 最短合法帧: 从站(1) + 功能码(1) + 数据(≥1) + CRC(2) = 5
+        if len(raw) < 5:
+            return ModbusResponse(
+                slave_id=raw[0] if raw else 0,
+                function_code=0,
+                data=b"",
+                raw_rx=raw,
+                is_error=True,
+                error_code=-3,  # 帧长度不足
+            )
+
         resp = ModbusResponse(
             slave_id=raw[0],
             function_code=raw[1],
@@ -99,15 +110,28 @@ class ModbusRTU:
             # 响应: [从站][功能码][字节数][数据...]
             byte_count = raw[2]
             resp.data = raw[3:3 + byte_count]
+            # 校验实际数据长度是否匹配
+            if len(resp.data) < byte_count:
+                resp.is_error = True
+                resp.error_code = -3
+                return resp
             # 将字节数据解析为 16 位寄存器值列表
-            for i in range(0, byte_count, 2):
+            for i in range(0, byte_count - 1, 2):
                 resp.values.append((resp.data[i] << 8) | resp.data[i + 1])
         elif fc == FunctionCode.WRITE_SINGLE:
             # 响应: [从站][功能码][地址H][地址L][值H][值L]
+            if len(raw) < 8:
+                resp.is_error = True
+                resp.error_code = -3
+                return resp
             resp.data = raw[2:6]
             resp.values = [(raw[4] << 8) | raw[5]]
         elif fc == FunctionCode.WRITE_MULTIPLE:
             # 响应: [从站][功能码][地址H][地址L][数量H][数量L]
+            if len(raw) < 8:
+                resp.is_error = True
+                resp.error_code = -3
+                return resp
             resp.data = raw[2:6]
             resp.values = [(raw[4] << 8) | raw[5]]
 

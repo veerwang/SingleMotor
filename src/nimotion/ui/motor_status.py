@@ -48,6 +48,7 @@ class MotorStatusPanel(QWidget):
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._on_poll)
         self._motor.status_updated.connect(self._update_display)
+        self._motor._worker.disconnected.connect(self._on_disconnected)
         self.setFixedWidth(220)
         self._init_ui()
 
@@ -131,6 +132,11 @@ class MotorStatusPanel(QWidget):
 
     def _on_poll(self) -> None:
         self._motor.refresh_status()
+
+    def _on_disconnected(self) -> None:
+        """设备断连时停止自动轮询。"""
+        self._timer.stop()
+        self._auto_cb.setChecked(False)
 
     def _update_display(self, status: MotorStatus) -> None:
         # 状态

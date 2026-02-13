@@ -138,3 +138,4 @@ class ConnectionBar(QWidget):
         self._baud_combo.setEnabled(enabled)
         self._parity_combo.setEnabled(enabled)
         self._stop_combo.setEnabled(enabled)
+        self._slave_spin.setEnabled(enabled)

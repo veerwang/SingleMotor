@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
@@ -38,18 +38,34 @@ class TurretPanel(QWidget):
         TurretPosition.POS_4: "位置 4",
     }
 
+    _PARAM_READ_TIMEOUT_MS = 3000  # 参数读取超时（毫秒）
+    _MOVING_TIMEOUT_MS = 30000  # 运动超时（毫秒）
+
     def __init__(self, motor_service: MotorService, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._motor = motor_service
         self._homed = False
         self._is_moving = False
         self._position_pulses: dict[TurretPosition, int] | None = None
+
+        # 参数读取超时定时器
+        self._param_timer = QTimer(self)
+        self._param_timer.setSingleShot(True)
+        self._param_timer.timeout.connect(self._on_param_timeout)
+
+        # 运动超时定时器
+        self._moving_timer = QTimer(self)
+        self._moving_timer.setSingleShot(True)
+        self._moving_timer.timeout.connect(self._on_moving_timeout)
+
         self._init_ui()
         self._motor.status_updated.connect(self._on_status_updated)
         self._motor.operation_done.connect(self._on_operation_done)
         self._motor.param_read.connect(self._on_param_read)
+        self._motor._worker.disconnected.connect(self._on_disconnected)
         # 启动时读取细分参数
         self._motor.read_param(MICROSTEP_REG_ADDR)
+        self._param_timer.start(self._PARAM_READ_TIMEOUT_MS)
 
     def _init_ui(self) -> None:
         layout = QHBoxLayout(self)
@@ -115,6 +131,7 @@ class TurretPanel(QWidget):
         self._status_label.setStyleSheet("color: #FFA726;")
         self._motor.set_run_mode(RunMode.HOMING)
         self._motor.start_homing()
+        self._moving_timer.start(self._MOVING_TIMEOUT_MS)
 
     def _on_switch(self, pos: TurretPosition) -> None:
         """切换到指定物镜位置。"""
@@ -126,6 +143,7 @@ class TurretPanel(QWidget):
         self._status_label.setStyleSheet("color: #FFA726;")
         self._motor.set_run_mode(RunMode.POSITION)
         self._motor.move_absolute(target)
+        self._moving_timer.start(self._MOVING_TIMEOUT_MS)
 
     # -- 信号处理 --
 
@@ -133,7 +151,13 @@ class TurretPanel(QWidget):
         """接收参数读取结果，处理细分寄存器。"""
         if address != MICROSTEP_REG_ADDR:
             return
-        microstep = microstep_from_register(value)
+        self._param_timer.stop()
+        try:
+            microstep = microstep_from_register(value)
+        except ValueError:
+            self._status_label.setText(f"细分参数异常: {value}")
+            self._status_label.setStyleSheet("color: #F44336;")
+            return
         self._position_pulses = calculate_position_pulses(microstep)
         self._status_label.setText("")
         self._home_btn.setEnabled(True)
@@ -163,6 +187,7 @@ class TurretPanel(QWidget):
 
         # 运动结束检测
         if self._is_moving and not status.is_running:
+            self._moving_timer.stop()
             self._set_moving(False)
             self._status_label.setText("")
 
@@ -172,6 +197,30 @@ class TurretPanel(QWidget):
             self._status_label.setText(message)
             self._status_label.setStyleSheet("color: #F44336;")
             self._set_moving(False)
+
+    def _on_param_timeout(self) -> None:
+        """参数读取超时处理。"""
+        if self._position_pulses is not None:
+            return  # 已经成功读取
+        self._status_label.setText("读取参数超时，请检查连接")
+        self._status_label.setStyleSheet("color: #F44336;")
+
+    def _on_moving_timeout(self) -> None:
+        """运动超时处理。"""
+        if not self._is_moving:
+            return
+        self._set_moving(False)
+        self._status_label.setText("运动超时")
+        self._status_label.setStyleSheet("color: #F44336;")
+
+    def _on_disconnected(self) -> None:
+        """设备断连处理。"""
+        self._param_timer.stop()
+        self._moving_timer.stop()
+        if self._is_moving:
+            self._set_moving(False)
+        self._status_label.setText("设备已断开")
+        self._status_label.setStyleSheet("color: #F44336;")
 
     # -- 辅助方法 --
 
