@@ -13,8 +13,10 @@ from PyQt5.QtWidgets import (
 )
 
 from ..models.turret import (
-    POSITION_PULSES,
+    MICROSTEP_REG_ADDR,
     TurretPosition,
+    calculate_position_pulses,
+    microstep_from_register,
     pulse_to_turret_position,
 )
 from ..models.types import MotorStatus, RunMode
@@ -41,9 +43,13 @@ class TurretPanel(QWidget):
         self._motor = motor_service
         self._homed = False
         self._is_moving = False
+        self._position_pulses: dict[TurretPosition, int] | None = None
         self._init_ui()
         self._motor.status_updated.connect(self._on_status_updated)
         self._motor.operation_done.connect(self._on_operation_done)
+        self._motor.param_read.connect(self._on_param_read)
+        # 启动时读取细分参数
+        self._motor.read_param(MICROSTEP_REG_ADDR)
 
     def _init_ui(self) -> None:
         layout = QHBoxLayout(self)
@@ -60,7 +66,7 @@ class TurretPanel(QWidget):
         self._pos_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #AAA;")
         left.addWidget(self._pos_label)
 
-        self._status_label = QLabel("")
+        self._status_label = QLabel("读取参数中...")
         self._status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._status_label.setStyleSheet("color: #666;")
         left.addWidget(self._status_label)
@@ -75,6 +81,7 @@ class TurretPanel(QWidget):
         home_group = QGroupBox("归零")
         home_layout = QVBoxLayout()
         self._home_btn = QPushButton("原点回归")
+        self._home_btn.setEnabled(False)  # 读取细分参数前禁用
         self._home_btn.clicked.connect(self._on_home)
         home_layout.addWidget(self._home_btn)
         home_group.setLayout(home_layout)
@@ -111,7 +118,9 @@ class TurretPanel(QWidget):
 
     def _on_switch(self, pos: TurretPosition) -> None:
         """切换到指定物镜位置。"""
-        target = POSITION_PULSES[pos]
+        if self._position_pulses is None:
+            return
+        target = self._position_pulses[pos]
         self._set_moving(True)
         self._status_label.setText(f"正在切换到{self._POS_LABELS[pos]}...")
         self._status_label.setStyleSheet("color: #FFA726;")
@@ -120,9 +129,22 @@ class TurretPanel(QWidget):
 
     # -- 信号处理 --
 
+    def _on_param_read(self, address: int, value: int) -> None:
+        """接收参数读取结果，处理细分寄存器。"""
+        if address != MICROSTEP_REG_ADDR:
+            return
+        microstep = microstep_from_register(value)
+        self._position_pulses = calculate_position_pulses(microstep)
+        self._status_label.setText("")
+        self._home_btn.setEnabled(True)
+        self._update_switch_buttons()
+
     def _on_status_updated(self, status: MotorStatus) -> None:
         """根据电机实时状态更新 UI。"""
-        pos = pulse_to_turret_position(status.position)
+        if self._position_pulses is None:
+            return
+
+        pos = pulse_to_turret_position(status.position, self._position_pulses)
         self._turret.set_position(pos)
 
         if pos != TurretPosition.UNKNOWN:
@@ -156,11 +178,17 @@ class TurretPanel(QWidget):
     def _set_moving(self, moving: bool) -> None:
         """设置运动状态，更新按钮可用性。"""
         self._is_moving = moving
-        self._home_btn.setEnabled(not moving)
+        self._home_btn.setEnabled(
+            not moving and self._position_pulses is not None
+        )
         self._update_switch_buttons()
 
     def _update_switch_buttons(self) -> None:
         """根据归零状态和运动状态更新切换按钮。"""
-        enabled = self._homed and not self._is_moving
+        enabled = (
+            self._homed
+            and not self._is_moving
+            and self._position_pulses is not None
+        )
         for btn in self._switch_btns.values():
             btn.setEnabled(enabled)

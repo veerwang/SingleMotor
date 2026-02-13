@@ -7,28 +7,29 @@
 ## 最新会话
 
 **日期**: 2026-02-13
-**位置**: 技术文档处理
+**位置**: 转盘脉冲参数动态读取重构
 
 ### 本次完成
 
-- 创建 README.md 项目说明文件
-- 创建 Claude Code 项目管理文件（CLAUDE.md, TODO.md, SESSION.md）
-- 配置项目级 hooks 自动提醒（.claude/settings.json）
-- 提取 PDF 摘要：一体化步进电机 Modbus 通讯用户手册（63 页）→ `documents/一体化步进电机Modbus通讯手册_摘要.md`
-- 提取 PDF 摘要：STM 系列常见问题及解决方法（18 页）→ `documents/STM系列常见问题及解决方法_摘要.md`
-- 提取 PDF 摘要：SDM42 系列 485 总线电机驱动器使用说明书（17 页）→ `documents/SDM42系列485总线电机驱动器使用说明书_摘要.md`
+- 重构 `turret.py`：移除硬编码细分数（MICROSTEP=128），改为动态计算
+  - 新增 `MICROSTEP_REG_ADDR`、`microstep_from_register()`、`calculate_pulses_per_position()`、`calculate_position_pulses()`
+  - `pulse_to_turret_position()` 增加 `position_pulses` 参数，不再依赖全局常量
+- 重构 `turret_panel.py`：启动时从设备异步读取细分寄存器 `0x001A`
+  - 连接 `param_read` 信号，接收到细分值后动态计算并缓存 `_position_pulses`
+  - 读取完成前所有按钮禁用，状态显示 "读取参数中..."
+- 更新 `test_turret.py`：适配新 API，新增 `TestMicrostepFromRegister`、`TestCalculatePulsesPerPosition`、`TestCalculatePositionPulses` 等测试类
+- 全部 178 个测试通过
 
 ### 下次继续
 
-- 搭建 Python 项目基础结构（pyproject.toml / requirements.txt 等）
-- 实现 Modbus-RTU 通讯基础模块
-- 如有更多 PDF 文档需要处理，继续提取摘要
+- 连接真实硬件进行端到端测试
+- UI 界面优化和细节调整
+- 打包发布（PyInstaller / cx_Freeze）
 
 ### 备注
 
-- 技术文档 PDF 原件位于 `documents/documents/` 目录下
-- 已提取的 Markdown 摘要位于 `documents/` 目录下，包含完整的寄存器表、Modbus 报文速查、引脚定义等开发所需信息
-- 三份摘要覆盖了：通讯协议详细规范、常见问题排查、硬件接口与安装调试
+- 细分寄存器 `0x001A` 值 0~7 对应细分 1/2/4/.../128，即 `microstep = 2 ** reg_value`
+- 沿用 `motor_params.py` 的异步读取模式：`__init__` 中连接信号 + 发起读取，回调中处理结果
 
 ---
 
@@ -36,10 +37,16 @@
 
 <!-- 保留最近 3-5 次会话记录，太旧的可以删除 -->
 
+### 2026-02-13 - UI/服务/通讯/模型层全部实现
+
+- UI 层全部实现（主窗口 + 3个Tab + 自定义控件），冒烟测试通过
+- 服务层、通讯层、模型层实现 + 测试
+- 项目基础搭建、设计文档、需求文档、测试文档编写
+
 ### 2026-02-13 - 项目初始化
 
 - 创建项目管理文件和 README.md
-- 下次继续：技术文档处理、项目基础搭建
+- 提取技术文档 PDF 摘要
 
 ---
 
