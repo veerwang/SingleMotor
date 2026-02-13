@@ -167,7 +167,7 @@ class MotorControlPanel(QWidget):
             btn = QPushButton(name)
             btn.clicked.connect(handler)
             if name == "急停":
-                btn.setStyleSheet("background-color: #FFCDD2;")
+                btn.setProperty("cssClass", "danger")
             state_layout.addWidget(btn)
             self._state_buttons.append(btn)
 

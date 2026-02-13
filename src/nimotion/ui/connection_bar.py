@@ -79,6 +79,7 @@ class ConnectionBar(QWidget):
         # 连接按钮
         self._connect_btn = QPushButton("连接")
         self._connect_btn.setFixedWidth(80)
+        self._connect_btn.setProperty("cssClass", "primary")
         self._connect_btn.clicked.connect(self._on_connect_clicked)
         layout.addWidget(self._connect_btn)
 
