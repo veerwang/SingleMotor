@@ -107,7 +107,7 @@ class TestGetRegister:
 
     def test_wrong_type(self):
         """保持寄存器的地址用输入类型查找应返回 None（除非地址恰好重合）"""
-        reg = get_register(0x0000, RegisterType.INPUT)
+        reg = get_register(0x0039, RegisterType.INPUT)
         assert reg is None
 
     def test_overlapping_address_different_type(self):
