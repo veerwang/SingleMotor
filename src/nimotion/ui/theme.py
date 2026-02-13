@@ -59,7 +59,7 @@ STYLESHEET = f"""
 /* ── 全局 ── */
 * {{
     font-family: {FONT_UI};
-    font-size: 13px;
+    font-size: 20px;
     outline: none;
 }}
 
@@ -118,7 +118,7 @@ QTabBar::tab {{
     padding: 8px 20px;
     margin-right: 2px;
     font-weight: bold;
-    font-size: 13px;
+    font-size: 20px;
     min-width: 100px;
 }}
 QTabBar::tab:selected {{
@@ -141,7 +141,7 @@ QGroupBox {{
     margin-top: 16px;
     padding: 12px 8px 8px 8px;
     font-weight: bold;
-    font-size: 13px;
+    font-size: 20px;
     color: {YELLOW_PRIMARY};
 }}
 QGroupBox::title {{
@@ -163,7 +163,7 @@ QPushButton {{
     border-bottom: 2px solid {YELLOW_DARK};
     padding: 6px 16px;
     font-weight: bold;
-    font-size: 12px;
+    font-size: 18px;
     min-height: 24px;
 }}
 QPushButton:hover {{
@@ -224,7 +224,7 @@ QLineEdit {{
     border-bottom: 2px solid {STEEL_HIGHLIGHT};
     padding: 5px 8px;
     font-family: {FONT_MONO};
-    font-size: 13px;
+    font-size: 20px;
     selection-background-color: {YELLOW_DARK};
     selection-color: {TEXT_ON_YELLOW};
 }}
@@ -283,7 +283,7 @@ QSpinBox, QDoubleSpinBox {{
     border-bottom: 2px solid {STEEL_HIGHLIGHT};
     padding: 4px 8px;
     font-family: {FONT_MONO};
-    font-size: 13px;
+    font-size: 20px;
 }}
 QSpinBox:focus, QDoubleSpinBox:focus {{
     border-bottom: 2px solid {YELLOW_PRIMARY};
@@ -351,7 +351,7 @@ QTableWidget {{
     border: 1px solid {PANEL_BORDER};
     gridline-color: {PANEL_BORDER};
     font-family: {FONT_MONO};
-    font-size: 12px;
+    font-size: 18px;
     alternate-background-color: {STEEL_GRAY};
     selection-background-color: {YELLOW_DARK};
     selection-color: {TEXT_ON_YELLOW};
@@ -372,7 +372,7 @@ QHeaderView::section {{
     border-right: 1px solid {PANEL_BORDER};
     padding: 6px 8px;
     font-weight: bold;
-    font-size: 11px;
+    font-size: 17px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
 }}
@@ -386,7 +386,7 @@ QPlainTextEdit, QTextEdit {{
     color: {GREEN_OK};
     border: 1px solid {PANEL_BORDER};
     font-family: {FONT_MONO};
-    font-size: 12px;
+    font-size: 18px;
     padding: 4px;
     selection-background-color: {YELLOW_DARK};
     selection-color: {TEXT_ON_YELLOW};
@@ -441,7 +441,7 @@ QStatusBar {{
     color: {TEXT_SECONDARY};
     border-top: 2px solid {YELLOW_DARK};
     font-family: {FONT_MONO};
-    font-size: 12px;
+    font-size: 18px;
     padding: 2px 8px;
 }}
 QStatusBar::item {{
@@ -458,7 +458,7 @@ QLabel {{
 QFormLayout QLabel {{
     color: {TEXT_SECONDARY};
     font-weight: bold;
-    font-size: 12px;
+    font-size: 18px;
 }}
 
 /* ── 消息框 ── */
@@ -467,7 +467,7 @@ QMessageBox {{
 }}
 QMessageBox QLabel {{
     color: {TEXT_PRIMARY};
-    font-size: 13px;
+    font-size: 20px;
 }}
 
 /* ── 工具提示 ── */
@@ -477,7 +477,7 @@ QToolTip {{
     border: 1px solid {YELLOW_DARK};
     padding: 4px 8px;
     font-weight: bold;
-    font-size: 12px;
+    font-size: 18px;
 }}
 
 /* ── 进度条（备用） ── */

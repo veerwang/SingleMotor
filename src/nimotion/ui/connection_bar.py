@@ -42,7 +42,7 @@ class ConnectionBar(QWidget):
         layout.addWidget(self._port_combo)
 
         self._refresh_btn = QPushButton("刷新")
-        self._refresh_btn.setFixedWidth(50)
+        self._refresh_btn.setFixedWidth(80)
         self._refresh_btn.clicked.connect(self._refresh_ports)
         layout.addWidget(self._refresh_btn)
 
@@ -78,7 +78,7 @@ class ConnectionBar(QWidget):
 
         # 连接按钮
         self._connect_btn = QPushButton("连接")
-        self._connect_btn.setFixedWidth(80)
+        self._connect_btn.setFixedWidth(100)
         self._connect_btn.setProperty("cssClass", "primary")
         self._connect_btn.clicked.connect(self._on_connect_clicked)
         layout.addWidget(self._connect_btn)
@@ -98,6 +98,11 @@ class ConnectionBar(QWidget):
         idx = self._port_combo.findText(current)
         if idx >= 0:
             self._port_combo.setCurrentIndex(idx)
+        elif not current:
+            # 首次加载时优先选择 ttyUSB0
+            usb_idx = self._port_combo.findText("/dev/ttyUSB0")
+            if usb_idx >= 0:
+                self._port_combo.setCurrentIndex(usb_idx)
 
     def _on_connect_clicked(self) -> None:
         if self._connected:

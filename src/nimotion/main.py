@@ -18,7 +18,7 @@ def main() -> None:
 
     window = MainWindow()
     window.setWindowTitle("NiMotion 步进电机调试工具 v0.1")
-    window.resize(1024, 700)
+    window.resize(1280, 800)
     window.show()
 
     sys.exit(app.exec_())
