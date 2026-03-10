@@ -43,7 +43,7 @@ class CommWorker(QThread):
         # 请求队列 (用 mutex + condition 实现)
         self._mutex = QMutex()
         self._condition = QWaitCondition()
-        self._pending_request: ModbusRequest | None = None
+        self._request_queue: list[ModbusRequest] = []
         self._pending_raw: bytes | None = None
         self._raw_mode = False  # True = 串口调试模式
 
@@ -73,9 +73,9 @@ class CommWorker(QThread):
         self.disconnected.emit()
 
     def send_modbus(self, request: ModbusRequest) -> None:
-        """提交 Modbus 请求（主线程调用）"""
+        """提交 Modbus 请求（主线程调用），支持连续多条排队"""
         self._mutex.lock()
-        self._pending_request = request
+        self._request_queue.append(request)
         self._raw_mode = False
         self._condition.wakeOne()
         self._mutex.unlock()
@@ -100,20 +100,24 @@ class CommWorker(QThread):
         while self._running:
             self._mutex.lock()
             # 等待请求或超时（超时用于检测串口调试模式的持续接收）
-            if self._pending_request is None and self._pending_raw is None:
+            if not self._request_queue and self._pending_raw is None:
                 self._condition.wait(self._mutex, 50)  # 50ms 轮询
-            request = self._pending_request
+            # 取出所有排队的请求
+            requests = list(self._request_queue)
+            self._request_queue.clear()
             raw = self._pending_raw
             raw_mode = self._raw_mode
-            self._pending_request = None
             self._pending_raw = None
             self._mutex.unlock()
 
             try:
                 if raw_mode and raw is not None:
                     self._handle_raw_send(raw)
-                elif request is not None:
-                    self._handle_modbus(request)
+                else:
+                    for request in requests:
+                        if not self._running:
+                            break
+                        self._handle_modbus(request)
 
                 # 串口调试模式：持续接收
                 if self._serial.is_open:

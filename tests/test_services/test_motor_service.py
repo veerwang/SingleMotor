@@ -86,21 +86,35 @@ class TestStateControl:
 
 class TestMotionControl:
     def test_move_relative(self, service, mock_worker):
+        """未使能状态：自动补发 0x06+0x07，共 5 条命令"""
+        with patch.object(mock_worker, "send_modbus") as mock_send:
+            service.move_relative(1000)
+            assert mock_send.call_count == 5
+            # 写目标位置 (32位)
+            req = mock_send.call_args_list[0][0][0]
+            assert req.function_code == FunctionCode.WRITE_MULTIPLE
+            assert req.address == 0x0053
+            # 自动使能: 0x06, 0x07
+            assert mock_send.call_args_list[1][0][0].values == [0x0006]
+            assert mock_send.call_args_list[2][0][0].values == [0x0007]
+            # 控制字 0x4F, 0x5F
+            assert mock_send.call_args_list[3][0][0].values == [0x004F]
+            assert mock_send.call_args_list[4][0][0].values == [0x005F]
+
+    def test_move_relative_already_enabled(self, service, mock_worker):
+        """已使能状态：跳过自动使能，共 3 条命令"""
+        service._last_state = MotorState.SWITCHED_ON
         with patch.object(mock_worker, "send_modbus") as mock_send:
             service.move_relative(1000)
             assert mock_send.call_count == 3
-            # 第一次: 写目标位置 (32位)
-            req1 = mock_send.call_args_list[0][0][0]
-            assert req1.function_code == FunctionCode.WRITE_MULTIPLE
-            assert req1.address == 0x0053
-            # 第二次: 控制字 0x004F
-            req2 = mock_send.call_args_list[1][0][0]
-            assert req2.values == [0x004F]
-            # 第三次: 控制字 0x005F
-            req3 = mock_send.call_args_list[2][0][0]
-            assert req3.values == [0x005F]
 
     def test_move_absolute(self, service, mock_worker):
+        with patch.object(mock_worker, "send_modbus") as mock_send:
+            service.move_absolute(5000)
+            assert mock_send.call_count == 5
+
+    def test_move_absolute_already_enabled(self, service, mock_worker):
+        service._last_state = MotorState.OPERATION_ENABLED
         with patch.object(mock_worker, "send_modbus") as mock_send:
             service.move_absolute(5000)
             assert mock_send.call_count == 3
@@ -108,7 +122,7 @@ class TestMotionControl:
     def test_set_speed(self, service, mock_worker):
         with patch.object(mock_worker, "send_modbus") as mock_send:
             service.set_speed(500, 1)
-            assert mock_send.call_count == 3
+            assert mock_send.call_count == 5
             # 方向
             req1 = mock_send.call_args_list[0][0][0]
             assert req1.address == 0x0052
@@ -116,14 +130,31 @@ class TestMotionControl:
             # 速度 (32位)
             req2 = mock_send.call_args_list[1][0][0]
             assert req2.address == 0x0055
+            # 自动使能: 0x06, 0x07
+            assert mock_send.call_args_list[2][0][0].values == [0x0006]
+            assert mock_send.call_args_list[3][0][0].values == [0x0007]
             # 控制字
-            req3 = mock_send.call_args_list[2][0][0]
-            assert req3.values == [0x000F]
+            assert mock_send.call_args_list[4][0][0].values == [0x000F]
+
+    def test_set_speed_already_enabled(self, service, mock_worker):
+        service._last_state = MotorState.SWITCHED_ON
+        with patch.object(mock_worker, "send_modbus") as mock_send:
+            service.set_speed(500, 0)
+            assert mock_send.call_count == 3
+            assert mock_send.call_args_list[0][0][0].values == [0]  # 反转
 
     def test_start_homing(self, service, mock_worker):
         with patch.object(mock_worker, "send_modbus") as mock_send:
             service.start_homing()
-            assert mock_send.call_count == 2
+            assert mock_send.call_count == 4
+
+    def test_start_homing_from_startup(self, service, mock_worker):
+        """已启动状态：只补发 0x07，共 3 条命令"""
+        service._last_state = MotorState.READY_TO_SWITCH_ON
+        with patch.object(mock_worker, "send_modbus") as mock_send:
+            service.start_homing()
+            assert mock_send.call_count == 3
+            assert mock_send.call_args_list[0][0][0].values == [0x0007]
 
 
 class TestParamOperations:

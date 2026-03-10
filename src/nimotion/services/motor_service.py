@@ -32,6 +32,7 @@ class MotorService(QObject):
         super().__init__()
         self._worker = worker
         self._slave_id = slave_id
+        self._last_state = MotorState.UNKNOWN
         self._worker.response_received.connect(self._on_response)
 
     @property
@@ -93,12 +94,14 @@ class MotorService(QObject):
     def move_relative(self, position: int) -> None:
         """相对位置运动"""
         self._write_32bit(0x0053, position, signed=True)
+        self._ensure_enabled()
         self._write_control_word(0x004F)
         self._write_control_word(0x005F)
 
     def move_absolute(self, position: int) -> None:
         """绝对位置运动"""
         self._write_32bit(0x0053, position, signed=True)
+        self._ensure_enabled()
         self._write_control_word(0x000F)
         self._write_control_word(0x001F)
 
@@ -106,10 +109,12 @@ class MotorService(QObject):
         """速度模式运行"""
         self._write_single(0x0052, direction)
         self._write_32bit(0x0055, speed)
+        self._ensure_enabled()
         self._write_control_word(0x000F)
 
     def start_homing(self) -> None:
         """开始原点回归"""
+        self._ensure_enabled()
         self._write_control_word(0x000F)
         self._write_control_word(0x001F)
 
@@ -156,6 +161,25 @@ class MotorService(QObject):
         self._write_single(0x0047, 0x535A)
 
     # -- 内部方法 --
+
+    def _ensure_enabled(self) -> None:
+        """确保电机至少处于使能状态，按需补发启动/使能命令。
+
+        根据缓存的状态判断：
+        - 已使能/运行：无需操作
+        - 已启动：只需发使能(0x07)
+        - 其他(无故障/未知等)：发启动(0x06)+使能(0x07)
+        """
+        if self._last_state in (
+            MotorState.SWITCHED_ON,
+            MotorState.OPERATION_ENABLED,
+        ):
+            return
+        if self._last_state == MotorState.READY_TO_SWITCH_ON:
+            self._write_control_word(0x0007)
+        else:
+            self._write_control_word(0x0006)
+            self._write_control_word(0x0007)
 
     def _write_control_word(self, value: int) -> None:
         self._write_single(0x0051, value)
@@ -230,6 +254,7 @@ class MotorService(QObject):
         status.alarm_code = vals[15]
         status.alarm_text = get_error_text(vals[15]) if vals[15] else ""
 
+        self._last_state = status.state
         self.status_updated.emit(status)
 
     @staticmethod
