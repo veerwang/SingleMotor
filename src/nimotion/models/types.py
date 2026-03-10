@@ -99,6 +99,15 @@ class ModbusResponse:
 
 
 @dataclass
+class HomingConfig:
+    """原点回归配置参数"""
+
+    method: int = 17  # 0x006B, 回归方式 17~31
+    origin_offset: int = 0  # 0x0069, 原点偏移 (pulse, 32-bit signed)
+    zero_return: int = 0  # 0x0072, 零点回归 0=禁用 1=启用
+
+
+@dataclass
 class MotorStatus:
     """电机实时状态快照"""
 

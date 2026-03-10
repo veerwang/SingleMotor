@@ -86,75 +86,65 @@ class TestStateControl:
 
 class TestMotionControl:
     def test_move_relative(self, service, mock_worker):
-        """未使能状态：自动补发 0x06+0x07，共 5 条命令"""
+        """自包含完整序列: 停机+设模式+写目标+启动+使能+相对运行+触发 = 7 条"""
         with patch.object(mock_worker, "send_modbus") as mock_send:
             service.move_relative(1000)
-            assert mock_send.call_count == 5
+            assert mock_send.call_count == 7
+            # 停机
+            assert mock_send.call_args_list[0][0][0].values == [0x0000]
+            # 设位置模式
+            req1 = mock_send.call_args_list[1][0][0]
+            assert req1.address == 0x0039
             # 写目标位置 (32位)
-            req = mock_send.call_args_list[0][0][0]
-            assert req.function_code == FunctionCode.WRITE_MULTIPLE
-            assert req.address == 0x0053
-            # 自动使能: 0x06, 0x07
-            assert mock_send.call_args_list[1][0][0].values == [0x0006]
-            assert mock_send.call_args_list[2][0][0].values == [0x0007]
-            # 控制字 0x4F, 0x5F
-            assert mock_send.call_args_list[3][0][0].values == [0x004F]
-            assert mock_send.call_args_list[4][0][0].values == [0x005F]
-
-    def test_move_relative_already_enabled(self, service, mock_worker):
-        """已使能状态：跳过自动使能，共 3 条命令"""
-        service._last_state = MotorState.SWITCHED_ON
-        with patch.object(mock_worker, "send_modbus") as mock_send:
-            service.move_relative(1000)
-            assert mock_send.call_count == 3
+            req2 = mock_send.call_args_list[2][0][0]
+            assert req2.function_code == FunctionCode.WRITE_MULTIPLE
+            assert req2.address == 0x0053
+            # 启动+使能
+            assert mock_send.call_args_list[3][0][0].values == [0x0006]
+            assert mock_send.call_args_list[4][0][0].values == [0x0007]
+            # 相对模式+触发
+            assert mock_send.call_args_list[5][0][0].values == [0x004F]
+            assert mock_send.call_args_list[6][0][0].values == [0x005F]
 
     def test_move_absolute(self, service, mock_worker):
+        """自包含完整序列: 停机+设模式+写目标+启动+使能+绝对运行+触发 = 7 条"""
         with patch.object(mock_worker, "send_modbus") as mock_send:
             service.move_absolute(5000)
-            assert mock_send.call_count == 5
-
-    def test_move_absolute_already_enabled(self, service, mock_worker):
-        service._last_state = MotorState.OPERATION_ENABLED
-        with patch.object(mock_worker, "send_modbus") as mock_send:
-            service.move_absolute(5000)
-            assert mock_send.call_count == 3
+            assert mock_send.call_count == 7
+            assert mock_send.call_args_list[5][0][0].values == [0x000F]
+            assert mock_send.call_args_list[6][0][0].values == [0x001F]
 
     def test_set_speed(self, service, mock_worker):
+        """自包含完整序列: 停机+设模式+方向+速度+启动+使能+运行 = 7 条"""
         with patch.object(mock_worker, "send_modbus") as mock_send:
             service.set_speed(500, 1)
-            assert mock_send.call_count == 5
+            assert mock_send.call_count == 7
+            # 停机
+            assert mock_send.call_args_list[0][0][0].values == [0x0000]
+            # 设速度模式
+            assert mock_send.call_args_list[1][0][0].address == 0x0039
             # 方向
-            req1 = mock_send.call_args_list[0][0][0]
-            assert req1.address == 0x0052
-            assert req1.values == [1]
+            req_dir = mock_send.call_args_list[2][0][0]
+            assert req_dir.address == 0x0052
+            assert req_dir.values == [1]
             # 速度 (32位)
-            req2 = mock_send.call_args_list[1][0][0]
-            assert req2.address == 0x0055
-            # 自动使能: 0x06, 0x07
-            assert mock_send.call_args_list[2][0][0].values == [0x0006]
-            assert mock_send.call_args_list[3][0][0].values == [0x0007]
-            # 控制字
-            assert mock_send.call_args_list[4][0][0].values == [0x000F]
-
-    def test_set_speed_already_enabled(self, service, mock_worker):
-        service._last_state = MotorState.SWITCHED_ON
-        with patch.object(mock_worker, "send_modbus") as mock_send:
-            service.set_speed(500, 0)
-            assert mock_send.call_count == 3
-            assert mock_send.call_args_list[0][0][0].values == [0]  # 反转
+            assert mock_send.call_args_list[3][0][0].address == 0x0055
+            # 启动+使能+运行
+            assert mock_send.call_args_list[4][0][0].values == [0x0006]
+            assert mock_send.call_args_list[5][0][0].values == [0x0007]
+            assert mock_send.call_args_list[6][0][0].values == [0x000F]
 
     def test_start_homing(self, service, mock_worker):
+        """自包含完整序列: 停机+设模式+启动+使能+运行+触发 = 6 条"""
         with patch.object(mock_worker, "send_modbus") as mock_send:
             service.start_homing()
-            assert mock_send.call_count == 4
-
-    def test_start_homing_from_startup(self, service, mock_worker):
-        """已启动状态：只补发 0x07，共 3 条命令"""
-        service._last_state = MotorState.READY_TO_SWITCH_ON
-        with patch.object(mock_worker, "send_modbus") as mock_send:
-            service.start_homing()
-            assert mock_send.call_count == 3
-            assert mock_send.call_args_list[0][0][0].values == [0x0007]
+            assert mock_send.call_count == 6
+            assert mock_send.call_args_list[0][0][0].values == [0x0000]
+            assert mock_send.call_args_list[1][0][0].address == 0x0039
+            assert mock_send.call_args_list[2][0][0].values == [0x0006]
+            assert mock_send.call_args_list[3][0][0].values == [0x0007]
+            assert mock_send.call_args_list[4][0][0].values == [0x000F]
+            assert mock_send.call_args_list[5][0][0].values == [0x001F]
 
 
 class TestParamOperations:

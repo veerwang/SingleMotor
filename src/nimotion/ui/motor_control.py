@@ -15,7 +15,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from ..models.types import RunMode
+from ..models.types import HomingConfig, RunMode
 from ..services.motor_service import MotorService
 
 
@@ -107,6 +107,7 @@ class HomingPanel(QWidget):
     def __init__(self, motor_service: MotorService, parent=None) -> None:
         super().__init__(parent)
         self._motor = motor_service
+        self._motor.homing_config_status.connect(self._on_config_status)
         layout = QVBoxLayout(self)
 
         form = QFormLayout()
@@ -114,7 +115,22 @@ class HomingPanel(QWidget):
         self._method_spin.setRange(17, 31)
         self._method_spin.setValue(17)
         form.addRow("回归方式:", self._method_spin)
+
+        self._offset_spin = QSpinBox()
+        self._offset_spin.setRange(-999999, 999999)
+        self._offset_spin.setValue(500)
+        self._offset_spin.setSuffix(" pulse")
+        form.addRow("原点偏移:", self._offset_spin)
+
+        self._zero_return_combo = QComboBox()
+        self._zero_return_combo.addItem("禁用", 0)
+        self._zero_return_combo.addItem("启用", 1)
+        self._zero_return_combo.setCurrentIndex(1)
+        form.addRow("零点回归:", self._zero_return_combo)
         layout.addLayout(form)
+
+        self._status_label = QLabel("")
+        layout.addWidget(self._status_label)
 
         btn_row = QHBoxLayout()
         start_btn = QPushButton("开始回归")
@@ -133,7 +149,16 @@ class HomingPanel(QWidget):
         layout.addStretch()
 
     def _on_start(self) -> None:
-        self._motor.start_homing()
+        config = HomingConfig(
+            method=self._method_spin.value(),
+            origin_offset=self._offset_spin.value(),
+            zero_return=self._zero_return_combo.currentData(),
+        )
+        self._status_label.setText("正在检查参数...")
+        self._motor.configure_and_start_homing(config)
+
+    def _on_config_status(self, msg: str) -> None:
+        self._status_label.setText(msg)
 
 
 class MotorControlPanel(QWidget):

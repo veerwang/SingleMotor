@@ -6,36 +6,51 @@
 
 ## 最新会话
 
-**日期**: 2026-02-13
-**位置**: 转盘脉冲参数动态读取重构
+**日期**: 2026-03-10
+**位置**: 回零配置集成到程序
 
 ### 本次完成
 
-- 重构 `turret.py`：移除硬编码细分数（MICROSTEP=128），改为动态计算
-  - 新增 `MICROSTEP_REG_ADDR`、`microstep_from_register()`、`calculate_pulses_per_position()`、`calculate_position_pulses()`
-  - `pulse_to_turret_position()` 增加 `position_pulses` 参数，不再依赖全局常量
-- 重构 `turret_panel.py`：启动时从设备异步读取细分寄存器 `0x001A`
-  - 连接 `param_read` 信号，接收到细分值后动态计算并缓存 `_position_pulses`
-  - 读取完成前所有按钮禁用，状态显示 "读取参数中..."
-- 更新 `test_turret.py`：适配新 API，新增 `TestMicrostepFromRegister`、`TestCalculatePulsesPerPosition`、`TestCalculatePositionPulses` 等测试类
-- 全部 178 个测试通过
+- **回零参数自动配置集成到程序**（之前是一次性手工脚本）：
+  - 新增 `HomingConfig` 数据类 (`models/types.py`)：method、origin_offset、zero_return
+  - 新增 `configure_and_start_homing(config)` 方法 (`motor_service.py`)：
+    - 异步读取设备当前值 → 比对 → 仅写差异 → 有写入才保存 EEPROM → 启动回零
+    - 3 秒超时保护，防止通讯异常卡死
+    - 第二次运行同一设备时参数一致则 **0 次 EEPROM 写入**
+  - HomingPanel UI 增加原点偏移 (默认 500 pulse) 和零点回归 (默认启用) 控件
+  - 状态标签显示 "参数已一致" 或 "已更新并保存: ..."
+- 配置原点偏移=500、零点回归=启用，已写入设备 EEPROM
+- 更新单元测试适配重构后的自包含命令序列，178 测试全通过
 
 ### 下次继续
 
-- 连接真实硬件进行端到端测试
+- 打开 UI 测试回零功能（验证回零后自动移离限位 500 脉冲）
 - UI 界面优化和细节调整
 - 打包发布（PyInstaller / cx_Freeze）
 
 ### 备注
 
-- 细分寄存器 `0x001A` 值 0~7 对应细分 1/2/4/.../128，即 `microstep = 2 ** reg_value`
-- 沿用 `motor_params.py` 的异步读取模式：`__init__` 中连接信号 + 发起读取，回调中处理结果
+- DI 寄存器情况：0x002D(DI2)=1(负限位)，0x002C(DI1) 写入后回读为 0（可能硬件映射到 DI2）
+- 设备 EEPROM 当前参数：homing_method=17, origin_offset=500, zero_return=1
+- EEPROM 写入保护逻辑：先读后比，值相同则跳过，避免频繁写入
 
 ---
 
 ## 历史记录
 
 <!-- 保留最近 3-5 次会话记录，太旧的可以删除 -->
+
+### 2026-03-10 - 端到端硬件测试与 UI 运动修复
+
+- 编写端到端测试脚本 `tests/test_e2e.py`，10 项测试全通过
+- 修复 UI 运动命令不工作（命令序列重构为自包含）
+- 修复原点回归（DI1=负限位, 方式=17, 保存 EEPROM）
+- UI 验证通过：相对运动、绝对运动、速度模式、原点回归
+
+### 2026-02-13 - 转盘脉冲参数动态读取重构
+
+- 重构 `turret.py` / `turret_panel.py`，细分数改为从设备动态读取
+- 178 测试全通过
 
 ### 2026-02-13 - UI/服务/通讯/模型层全部实现
 

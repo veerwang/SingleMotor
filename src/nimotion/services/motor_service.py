@@ -5,13 +5,14 @@
 
 from __future__ import annotations
 
-from PyQt5.QtCore import QObject, pyqtSignal
+from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 
 from ..communication.modbus_rtu import ModbusRTU
 from ..communication.worker import CommWorker
 from ..models.error_codes import get_error_text, get_exception_text
 from ..models.types import (
     FunctionCode,
+    HomingConfig,
     ModbusRequest,
     ModbusResponse,
     MotorState,
@@ -27,6 +28,7 @@ class MotorService(QObject):
     status_updated = pyqtSignal(object)  # MotorStatus
     param_read = pyqtSignal(int, int)  # (地址, 值)
     operation_done = pyqtSignal(bool, str)  # (成功, 消息)
+    homing_config_status = pyqtSignal(str)  # 回零配置状态信息
 
     def __init__(self, worker: CommWorker, slave_id: int = 1) -> None:
         super().__init__()
@@ -34,6 +36,14 @@ class MotorService(QObject):
         self._slave_id = slave_id
         self._last_state = MotorState.UNKNOWN
         self._worker.response_received.connect(self._on_response)
+
+        # 回零配置状态机
+        self._homing_config: HomingConfig | None = None
+        self._homing_read_values: dict[int, int] = {}
+        self._homing_phase: str = "idle"  # idle / reading / done
+        self._homing_timeout = QTimer()
+        self._homing_timeout.setSingleShot(True)
+        self._homing_timeout.timeout.connect(self._on_homing_config_timeout)
 
     @property
     def slave_id(self) -> int:
@@ -93,30 +103,59 @@ class MotorService(QObject):
 
     def move_relative(self, position: int) -> None:
         """相对位置运动"""
+        self._write_control_word(0x0000)  # 先停机
+        self._write_single(0x0039, int(RunMode.POSITION))  # 设置位置模式
         self._write_32bit(0x0053, position, signed=True)
-        self._ensure_enabled()
-        self._write_control_word(0x004F)
-        self._write_control_word(0x005F)
+        self._write_control_word(0x0006)  # 启动
+        self._write_control_word(0x0007)  # 使能
+        self._write_control_word(0x004F)  # 相对模式 + 运行
+        self._write_control_word(0x005F)  # 触发新位置
 
     def move_absolute(self, position: int) -> None:
         """绝对位置运动"""
+        self._write_control_word(0x0000)  # 先停机
+        self._write_single(0x0039, int(RunMode.POSITION))  # 设置位置模式
         self._write_32bit(0x0053, position, signed=True)
-        self._ensure_enabled()
-        self._write_control_word(0x000F)
-        self._write_control_word(0x001F)
+        self._write_control_word(0x0006)  # 启动
+        self._write_control_word(0x0007)  # 使能
+        self._write_control_word(0x000F)  # 绝对模式 + 运行
+        self._write_control_word(0x001F)  # 触发新位置
 
     def set_speed(self, speed: int, direction: int) -> None:
         """速度模式运行"""
+        self._write_control_word(0x0000)  # 先停机
+        self._write_single(0x0039, int(RunMode.SPEED))  # 设置速度模式
         self._write_single(0x0052, direction)
         self._write_32bit(0x0055, speed)
-        self._ensure_enabled()
-        self._write_control_word(0x000F)
+        self._write_control_word(0x0006)  # 启动
+        self._write_control_word(0x0007)  # 使能
+        self._write_control_word(0x000F)  # 运行
 
     def start_homing(self) -> None:
-        """开始原点回归"""
-        self._ensure_enabled()
-        self._write_control_word(0x000F)
-        self._write_control_word(0x001F)
+        """开始原点回归（不检查配置，直接启动）"""
+        self._write_control_word(0x0000)  # 先停机
+        self._write_single(0x0039, int(RunMode.HOMING))  # 设置原点回归模式
+        self._write_control_word(0x0006)  # 启动
+        self._write_control_word(0x0007)  # 使能
+        self._write_control_word(0x000F)  # 运行
+        self._write_control_word(0x001F)  # 触发
+
+    def configure_and_start_homing(self, config: HomingConfig) -> None:
+        """先确保设备回零参数与期望一致，再启动回零。
+
+        流程：读取设备当前值 → 比对 → 仅写差异 → 有写入才保存 EEPROM → 启动回零。
+        """
+        if self._homing_phase != "idle":
+            self.operation_done.emit(False, "回零配置流程进行中，请稍候")
+            return
+        self._homing_config = config
+        self._homing_read_values.clear()
+        self._homing_phase = "reading"
+        self._homing_timeout.start(3000)
+        # 发起 3 次读取：回归方式(1 reg)、原点偏移(2 reg)、零点回归(1 reg)
+        self.read_param(0x006B, 1)
+        self.read_param(0x0069, 2)
+        self.read_param(0x0072, 1)
 
     # -- 参数操作 --
 
@@ -222,6 +261,10 @@ class MotorService(QObject):
             start_addr = (resp.raw_tx[2] << 8) | resp.raw_tx[3]
             for i, val in enumerate(resp.values):
                 self.param_read.emit(start_addr + i, val)
+                if self._homing_phase == "reading":
+                    self._homing_read_values[start_addr + i] = val
+            if self._homing_phase == "reading":
+                self._check_homing_reads_complete()
         else:
             self.operation_done.emit(True, "操作成功")
 
@@ -273,6 +316,51 @@ class MotorService(QObject):
         if word == 0x0017:
             return MotorState.QUICK_STOP
         return MotorState.UNKNOWN
+
+    def _check_homing_reads_complete(self) -> None:
+        """检查回零配置参数是否全部读取完毕"""
+        needed = {0x0069, 0x006A, 0x006B, 0x0072}
+        if not needed.issubset(self._homing_read_values):
+            return
+        self._homing_timeout.stop()
+        self._homing_phase = "idle"
+        config = self._homing_config
+        assert config is not None
+
+        # 比对设备值与期望值
+        dev_method = self._homing_read_values[0x006B]
+        dev_offset = ModbusRTU.combine_32bit(
+            self._homing_read_values[0x0069],
+            self._homing_read_values[0x006A],
+            signed=True,
+        )
+        dev_zero_ret = self._homing_read_values[0x0072]
+
+        diffs: list[str] = []
+        if dev_method != config.method:
+            self._write_single(0x006B, config.method)
+            diffs.append(f"回归方式 {dev_method}->{config.method}")
+        if dev_offset != config.origin_offset:
+            self._write_32bit(0x0069, config.origin_offset, signed=True)
+            diffs.append(f"原点偏移 {dev_offset}->{config.origin_offset}")
+        if dev_zero_ret != config.zero_return:
+            self._write_single(0x0072, config.zero_return)
+            diffs.append(f"零点回归 {dev_zero_ret}->{config.zero_return}")
+
+        if diffs:
+            self.save_params()
+            msg = "已更新并保存: " + ", ".join(diffs)
+            self.homing_config_status.emit(msg)
+        else:
+            self.homing_config_status.emit("参数已一致，无需写入")
+
+        # 启动回零
+        self.start_homing()
+
+    def _on_homing_config_timeout(self) -> None:
+        """回零配置读取超时"""
+        self._homing_phase = "idle"
+        self.operation_done.emit(False, "读取回零参数超时")
 
     @staticmethod
     def _format_error(resp: ModbusResponse) -> str:
