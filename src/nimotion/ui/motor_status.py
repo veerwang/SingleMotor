@@ -106,7 +106,6 @@ class MotorStatusPanel(QWidget):
         refresh_row.addWidget(refresh_btn)
 
         self._auto_cb = QCheckBox("自动")
-        self._auto_cb.toggled.connect(self._on_auto_toggled)
         refresh_row.addWidget(self._auto_cb)
 
         self._interval_combo = QComboBox()
@@ -115,6 +114,9 @@ class MotorStatusPanel(QWidget):
         self._interval_combo.setCurrentIndex(1)  # 默认 500ms
         self._interval_combo.currentIndexChanged.connect(self._on_interval_changed)
         refresh_row.addWidget(self._interval_combo)
+
+        self._auto_cb.toggled.connect(self._on_auto_toggled)
+        self._auto_cb.setChecked(True)
 
         layout.addLayout(refresh_row)
         layout.addStretch()
