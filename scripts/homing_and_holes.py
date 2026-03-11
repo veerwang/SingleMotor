@@ -12,8 +12,8 @@ PORT = "COM6"
 SLAVE_ID = 1
 BAUDRATE = 115200
 
-# 转盘参数: microstep=8, gear_ratio=2.75, 4 holes
-PULSES_PER_HOLE = 1100  # 200*8*2.75/4 = 1100
+# 转盘参数: microstep=16, gear_ratio=2.75, 4 holes
+PULSES_PER_HOLE = 2200  # 200*16*2.75/4 = 2200
 
 sp = SerialPort()
 sp.open(SerialConfig(port=PORT, baudrate=BAUDRATE))

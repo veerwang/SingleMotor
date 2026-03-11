@@ -37,9 +37,10 @@ class MotorService(QObject):
     # 首次连接期望参数: (地址, 期望值, 名称, 是否32位)
     # 寄存器单位 Step/s (全步/秒), 实际 pulses/s = Step/s × 细分数
     INIT_PARAMS: list[tuple[int, int, str, bool]] = [
-        (0x005F, 600, "加速度", True),      # 600 Step/s² (×8=4800 pulses/s²)
-        (0x0061, 600, "减速度", True),      # 600 Step/s² (×8=4800 pulses/s²)
-        (0x005B, 60, "最大速度", True),     # 60 Step/s (×8=480 pulses/s)
+        (0x001A, 4, "细分", False),          # 寄存器值4 = 细分16 (需重启生效)
+        (0x005F, 600, "加速度", True),      # 600 Step/s² (×16=9600 pulses/s²)
+        (0x0061, 600, "减速度", True),      # 600 Step/s² (×16=9600 pulses/s²)
+        (0x005B, 60, "最大速度", True),     # 60 Step/s (×16=960 pulses/s)
     ]
 
     def __init__(self, worker: CommWorker, slave_id: int = 1) -> None:
