@@ -145,17 +145,9 @@ class HomingPanel(QWidget):
         layout.addWidget(self._status_label)
 
         btn_row = QHBoxLayout()
-        start_btn = QPushButton("开始回归")
+        start_btn = QPushButton("Homing")
         start_btn.clicked.connect(self._on_start)
         btn_row.addWidget(start_btn)
-
-        set_origin_btn = QPushButton("设置原点")
-        set_origin_btn.clicked.connect(self._motor.set_origin)
-        btn_row.addWidget(set_origin_btn)
-
-        set_zero_btn = QPushButton("设置零点")
-        set_zero_btn.clicked.connect(self._motor.set_zero)
-        btn_row.addWidget(set_zero_btn)
         btn_row.addStretch()
         layout.addLayout(btn_row)
         layout.addStretch()
