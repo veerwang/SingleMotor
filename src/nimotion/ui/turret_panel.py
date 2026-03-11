@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -59,6 +63,7 @@ class TurretPanel(QWidget):
         self._moving_timer.timeout.connect(self._on_moving_timeout)
 
         self._init_ui()
+        self._load_offsets()
         self._motor.status_updated.connect(self._on_status_updated)
         self._motor.operation_done.connect(self._on_operation_done)
         self._motor.param_read.connect(self._on_param_read)
@@ -107,14 +112,28 @@ class TurretPanel(QWidget):
         switch_group = QGroupBox("物镜切换")
         switch_layout = QVBoxLayout()
         self._switch_btns: dict[TurretPosition, QPushButton] = {}
+        self._offset_spins: dict[TurretPosition, QSpinBox] = {}
         for pos in (TurretPosition.POS_1, TurretPosition.POS_2,
                      TurretPosition.POS_3, TurretPosition.POS_4):
+            row = QHBoxLayout()
             label = self._POS_LABELS[pos]
             btn = QPushButton(label)
             btn.clicked.connect(lambda checked, p=pos: self._on_switch(p))
             btn.setEnabled(False)  # 未归零时禁用
-            switch_layout.addWidget(btn)
+            row.addWidget(btn)
             self._switch_btns[pos] = btn
+
+            offset_spin = QSpinBox()
+            offset_spin.setRange(-9999, 9999)
+            offset_spin.setValue(0)
+            offset_spin.setSuffix(" pulse")
+            offset_spin.setFixedWidth(110)
+            offset_spin.setToolTip("机械偏移补偿")
+            offset_spin.valueChanged.connect(self._save_offsets)
+            row.addWidget(offset_spin)
+            self._offset_spins[pos] = offset_spin
+
+            switch_layout.addLayout(row)
 
         switch_group.setLayout(switch_layout)
         right.addWidget(switch_group)
@@ -133,10 +152,10 @@ class TurretPanel(QWidget):
         self._moving_timer.start(self._MOVING_TIMEOUT_MS)
 
     def _on_switch(self, pos: TurretPosition) -> None:
-        """切换到指定物镜位置。"""
+        """切换到指定物镜位置（含机械偏移补偿）。"""
         if self._position_pulses is None:
             return
-        target = self._position_pulses[pos]
+        target = self._position_pulses[pos] + self._offset_spins[pos].value()
         self._set_moving(True)
         self._status_label.setText(f"正在切换到{self._POS_LABELS[pos]}...")
         self._status_label.setStyleSheet("color: #FFA726;")
@@ -239,3 +258,24 @@ class TurretPanel(QWidget):
         )
         for btn in self._switch_btns.values():
             btn.setEnabled(enabled)
+
+    _OFFSETS_FILE = Path(__file__).resolve().parents[3] / "turret_offsets.json"
+
+    def _load_offsets(self) -> None:
+        """从 JSON 文件加载偏移值。"""
+        if not self._OFFSETS_FILE.exists():
+            return
+        try:
+            data = json.loads(self._OFFSETS_FILE.read_text(encoding="utf-8"))
+            for pos, spin in self._offset_spins.items():
+                val = data.get(str(int(pos)), 0)
+                spin.setValue(int(val))
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    def _save_offsets(self) -> None:
+        """保存偏移值到 JSON 文件。"""
+        data = {str(int(pos)): spin.value() for pos, spin in self._offset_spins.items()}
+        self._OFFSETS_FILE.write_text(
+            json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8",
+        )
