@@ -30,6 +30,9 @@ class MotorTab(QWidget):
         # 右侧: 子 Tab
         self._sub_tabs = QTabWidget()
         self._sub_tabs.addTab(
+            TurretPanel(self._motor), "物镜转换"
+        )
+        self._sub_tabs.addTab(
             MotorControlPanel(self._motor), "运动控制"
         )
         self._sub_tabs.addTab(
@@ -37,8 +40,5 @@ class MotorTab(QWidget):
         )
         self._sub_tabs.addTab(
             MotorAlarmPanel(self._motor), "报警信息"
-        )
-        self._sub_tabs.addTab(
-            TurretPanel(self._motor), "物镜转换"
         )
         layout.addWidget(self._sub_tabs, stretch=1)
