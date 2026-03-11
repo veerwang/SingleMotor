@@ -118,14 +118,26 @@ class HomingPanel(QWidget):
 
         self._offset_spin = QSpinBox()
         self._offset_spin.setRange(-999999, 999999)
-        self._offset_spin.setValue(500)
+        self._offset_spin.setValue(0)
         self._offset_spin.setSuffix(" pulse")
         form.addRow("原点偏移:", self._offset_spin)
+
+        self._search_speed_spin = QSpinBox()
+        self._search_speed_spin.setRange(1, 15610)
+        self._search_speed_spin.setValue(50)
+        self._search_speed_spin.setSuffix(" Step/s")
+        form.addRow("寻找开关速度:", self._search_speed_spin)
+
+        self._zero_speed_spin = QSpinBox()
+        self._zero_speed_spin.setRange(1, 15610)
+        self._zero_speed_spin.setValue(20)
+        self._zero_speed_spin.setSuffix(" Step/s")
+        form.addRow("寻找零位速度:", self._zero_speed_spin)
 
         self._zero_return_combo = QComboBox()
         self._zero_return_combo.addItem("禁用", 0)
         self._zero_return_combo.addItem("启用", 1)
-        self._zero_return_combo.setCurrentIndex(1)
+        self._zero_return_combo.setCurrentIndex(0)
         form.addRow("零点回归:", self._zero_return_combo)
         layout.addLayout(form)
 
@@ -152,6 +164,8 @@ class HomingPanel(QWidget):
         config = HomingConfig(
             method=self._method_spin.value(),
             origin_offset=self._offset_spin.value(),
+            search_speed=self._search_speed_spin.value(),
+            zero_speed=self._zero_speed_spin.value(),
             zero_return=self._zero_return_combo.currentData(),
         )
         self._status_label.setText("正在检查参数...")

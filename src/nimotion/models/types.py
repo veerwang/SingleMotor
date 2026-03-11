@@ -103,8 +103,10 @@ class ModbusResponse:
 class HomingConfig:
     """原点回归配置参数"""
 
-    method: int = 17  # 0x006B, 回归方式 17~31
+    method: int = 17  # 0x006B, 回归方式 17=负限位开关回归
     origin_offset: int = 0  # 0x0069, 原点偏移 (pulse, 32-bit signed)
+    search_speed: int = 50  # 0x006C, 寻找开关速度 (Step/s, 0~15610)
+    zero_speed: int = 20  # 0x006E, 寻找零位速度 (Step/s, 0~15610)
     zero_return: int = 0  # 0x0072, 零点回归 0=禁用 1=启用
 
 

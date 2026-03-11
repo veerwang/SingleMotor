@@ -35,10 +35,11 @@ class MotorService(QObject):
     init_config_done = pyqtSignal(str)  # 首次连接参数校准完成
 
     # 首次连接期望参数: (地址, 期望值, 名称, 是否32位)
+    # 寄存器单位 Step/s (全步/秒), 实际 pulses/s = Step/s × 细分数
     INIT_PARAMS: list[tuple[int, int, str, bool]] = [
-        (0x005F, 200, "加速度", True),      # 200 Step/s²
-        (0x0061, 200, "减速度", True),      # 200 Step/s²
-        (0x005B, 250, "最大速度", True),    # 250 Step/s
+        (0x005F, 600, "加速度", True),      # 600 Step/s² (×8=4800 pulses/s²)
+        (0x0061, 600, "减速度", True),      # 600 Step/s² (×8=4800 pulses/s²)
+        (0x005B, 60, "最大速度", True),     # 60 Step/s (×8=480 pulses/s)
     ]
 
     def __init__(self, worker: CommWorker, slave_id: int = 1) -> None:
@@ -55,6 +56,12 @@ class MotorService(QObject):
         self._homing_timeout = QTimer()
         self._homing_timeout.setSingleShot(True)
         self._homing_timeout.timeout.connect(self._on_homing_config_timeout)
+        # 回零完成后恢复 DI1 的轮询
+        self._homing_di_restore: int | None = None
+        self._homing_poll_timer = QTimer()
+        self._homing_poll_timer.setInterval(500)
+        self._homing_poll_timer.timeout.connect(self._poll_homing_done)
+        self.status_updated.connect(self._check_homing_running)
 
         # 首次连接参数校准状态机
         self._init_phase: str = "idle"  # idle / reading / done
@@ -151,12 +158,15 @@ class MotorService(QObject):
 
     def start_homing(self) -> None:
         """开始原点回归（不检查配置，直接启动）"""
-        self._write_control_word(0x0000)  # 先停机
+        self._write_control_word(0x0006)  # 启动
         self._write_single(0x0039, int(RunMode.HOMING))  # 设置原点回归模式
         self._write_control_word(0x0006)  # 启动
         self._write_control_word(0x0007)  # 使能
         self._write_control_word(0x000F)  # 运行
         self._write_control_word(0x001F)  # 触发
+        # 如果需要回零后恢复 DI1，启动轮询
+        if self._homing_di_restore is not None:
+            self._homing_poll_timer.start()
 
     def configure_and_start_homing(self, config: HomingConfig) -> None:
         """先确保设备回零参数与期望一致，再启动回零。
@@ -170,10 +180,13 @@ class MotorService(QObject):
         self._homing_read_values.clear()
         self._homing_phase = "reading"
         self._homing_timeout.start(3000)
-        # 发起 3 次读取：回归方式(1 reg)、原点偏移(2 reg)、零点回归(1 reg)
-        self.read_param(0x006B, 1)
-        self.read_param(0x0069, 2)
-        self.read_param(0x0072, 1)
+        # 发起 6 次读取
+        self.read_param(0x002C, 2)   # DI功能 (2 reg, UINT32)
+        self.read_param(0x006B, 1)   # 回归方式 (1 reg)
+        self.read_param(0x0069, 2)   # 原点偏移 (2 reg, INT32)
+        self.read_param(0x006C, 2)   # 寻找开关速度 (2 reg, UINT32)
+        self.read_param(0x006E, 2)   # 寻找零位速度 (2 reg, UINT32)
+        self.read_param(0x0072, 1)   # 零点回归 (1 reg)
 
     # -- 首次连接参数校准 --
 
@@ -407,7 +420,7 @@ class MotorService(QObject):
 
     def _check_homing_reads_complete(self) -> None:
         """检查回零配置参数是否全部读取完毕"""
-        needed = {0x0069, 0x006A, 0x006B, 0x0072}
+        needed = {0x002C, 0x0069, 0x006B, 0x006C, 0x006E, 0x0072}
         if not needed.issubset(self._homing_read_values):
             return
         self._homing_timeout.stop()
@@ -415,22 +428,38 @@ class MotorService(QObject):
         config = self._homing_config
         assert config is not None
 
+        # 先停机，确保参数可写入
+        self._write_control_word(0x0000)
+
         # 比对设备值与期望值
+        # 0x002C: DI功能，DI1占bit[3:0]，回零时强制负限位
+        dev_di_func = self._homing_read_values[0x002C]
+        dev_di1 = dev_di_func & 0x0F
         dev_method = self._homing_read_values[0x006B]
-        dev_offset = ModbusRTU.combine_32bit(
-            self._homing_read_values[0x0069],
-            self._homing_read_values[0x006A],
-            signed=True,
-        )
+        # 32位寄存器已在 _on_response 中合并存储
+        dev_offset = self._homing_read_values[0x0069]
+        dev_search_speed = self._homing_read_values[0x006C]
+        dev_zero_speed = self._homing_read_values[0x006E]
         dev_zero_ret = self._homing_read_values[0x0072]
 
         diffs: list[str] = []
+        # 回零时强制 DI1=neg_limit(1)，method 17 依赖负限位信号
+        if dev_di1 != 1:
+            new_di_func = (dev_di_func & ~0x0F) | 1
+            self._write_32bit(0x002C, new_di_func)
+            diffs.append(f"DI1功能 {dev_di1}->1(负限位)")
         if dev_method != config.method:
             self._write_single(0x006B, config.method)
             diffs.append(f"回归方式 {dev_method}->{config.method}")
         if dev_offset != config.origin_offset:
             self._write_32bit(0x0069, config.origin_offset, signed=True)
             diffs.append(f"原点偏移 {dev_offset}->{config.origin_offset}")
+        if dev_search_speed != config.search_speed:
+            self._write_32bit(0x006C, config.search_speed)
+            diffs.append(f"寻找开关速度 {dev_search_speed}->{config.search_speed}")
+        if dev_zero_speed != config.zero_speed:
+            self._write_32bit(0x006E, config.zero_speed)
+            diffs.append(f"寻找零位速度 {dev_zero_speed}->{config.zero_speed}")
         if dev_zero_ret != config.zero_return:
             self._write_single(0x0072, config.zero_return)
             diffs.append(f"零点回归 {dev_zero_ret}->{config.zero_return}")
@@ -442,8 +471,27 @@ class MotorService(QObject):
         else:
             self.homing_config_status.emit("参数已一致，无需写入")
 
-        # 启动回零
+        # 启动回零；完成后通过 _on_response 监测状态字恢复 DI1
+        self._homing_di_restore = dev_di_func  # 记录原始 DI 配置
         self.start_homing()
+
+    def _poll_homing_done(self) -> None:
+        """轮询回零是否完成，完成后恢复 DI1 为无动作(0)"""
+        self.refresh_status()
+
+    def _check_homing_running(self, status: MotorStatus) -> None:
+        """由 status_updated 信号触发，检测回零完成"""
+        if self._homing_di_restore is None:
+            return
+        if not status.is_running and status.speed == 0:
+            self._homing_poll_timer.stop()
+            # 先停机，避免写 DI 时 error=6 (slave busy)
+            self._write_control_word(0x0000)
+            # 恢复 DI1 为无动作(0)，保留其他 DI 配置
+            restore = (self._homing_di_restore & ~0x0F) | 0
+            self._write_32bit(0x002C, restore)
+            self._homing_di_restore = None
+            self.homing_config_status.emit("回零完成，DI1 已恢复为无动作")
 
     def _on_homing_config_timeout(self) -> None:
         """回零配置读取超时"""
