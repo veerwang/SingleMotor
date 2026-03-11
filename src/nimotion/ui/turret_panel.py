@@ -19,7 +19,7 @@ from ..models.turret import (
     microstep_from_register,
     pulse_to_turret_position,
 )
-from ..models.types import HomingConfig, MotorStatus, RunMode
+from ..models.types import HomingConfig, MotorStatus
 from ..services.motor_service import MotorService
 from .widgets.turret_widget import TurretWidget
 
@@ -140,7 +140,6 @@ class TurretPanel(QWidget):
         self._set_moving(True)
         self._status_label.setText(f"正在切换到{self._POS_LABELS[pos]}...")
         self._status_label.setStyleSheet("color: #FFA726;")
-        self._motor.set_run_mode(RunMode.POSITION)
         self._motor.move_absolute(target)
         self._moving_timer.start(self._MOVING_TIMEOUT_MS)
 
