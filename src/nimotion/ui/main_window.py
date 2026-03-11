@@ -73,6 +73,9 @@ class MainWindow(QMainWindow):
         self._conn_bar.disconnect_requested.connect(self._on_disconnect)
         self._conn_bar.slave_id_changed.connect(self._on_slave_id_changed)
 
+        # Motor service
+        self._motor_service.init_config_done.connect(self._on_init_config_done)
+
         # Worker
         self._worker.connected.connect(self._on_connected)
         self._worker.disconnected.connect(self._on_disconnected)
@@ -90,6 +93,8 @@ class MainWindow(QMainWindow):
         config = self._worker._serial.config
         self._conn_status.setText(f"已连接 {config.port} {config.baudrate}")
         self._conn_status.setStyleSheet("color: green;")
+        # 首次连接参数校准
+        self._motor_service.check_init_params()
 
     def _on_disconnected(self) -> None:
         self._conn_bar.on_disconnected()
@@ -106,6 +111,9 @@ class MainWindow(QMainWindow):
 
     def _on_bytes_updated(self, tx: int, rx: int) -> None:
         self._bytes_label.setText(f"TX: {tx}  RX: {rx}")
+
+    def _on_init_config_done(self, msg: str) -> None:
+        self._status_bar.showMessage(msg, 5000)
 
     def closeEvent(self, event) -> None:
         """关闭窗口时断开串口"""

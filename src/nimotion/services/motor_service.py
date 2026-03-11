@@ -32,6 +32,14 @@ class MotorService(QObject):
     param_read = pyqtSignal(int, int)  # (地址, 值)
     operation_done = pyqtSignal(bool, str)  # (成功, 消息)
     homing_config_status = pyqtSignal(str)  # 回零配置状态信息
+    init_config_done = pyqtSignal(str)  # 首次连接参数校准完成
+
+    # 首次连接期望参数: (地址, 期望值, 名称, 是否32位)
+    INIT_PARAMS: list[tuple[int, int, str, bool]] = [
+        (0x005F, 200, "加速度", True),      # 200 Step/s²
+        (0x0061, 200, "减速度", True),      # 200 Step/s²
+        (0x005B, 250, "最大速度", True),    # 250 Step/s
+    ]
 
     def __init__(self, worker: CommWorker, slave_id: int = 1) -> None:
         super().__init__()
@@ -47,6 +55,13 @@ class MotorService(QObject):
         self._homing_timeout = QTimer()
         self._homing_timeout.setSingleShot(True)
         self._homing_timeout.timeout.connect(self._on_homing_config_timeout)
+
+        # 首次连接参数校准状态机
+        self._init_phase: str = "idle"  # idle / reading / done
+        self._init_read_values: dict[int, int] = {}
+        self._init_timeout = QTimer()
+        self._init_timeout.setSingleShot(True)
+        self._init_timeout.timeout.connect(self._on_init_config_timeout)
 
     @property
     def slave_id(self) -> int:
@@ -159,6 +174,49 @@ class MotorService(QObject):
         self.read_param(0x006B, 1)
         self.read_param(0x0069, 2)
         self.read_param(0x0072, 1)
+
+    # -- 首次连接参数校准 --
+
+    def check_init_params(self) -> None:
+        """首次连接时读取关键参数，与期望值比对，不一致则写入。"""
+        if self._init_phase != "idle":
+            return
+        self._init_phase = "reading"
+        self._init_read_values.clear()
+        self._init_timeout.start(3000)
+        for addr, _val, _name, is_32bit in self.INIT_PARAMS:
+            self.read_param(addr, 2 if is_32bit else 1)
+
+    def _check_init_reads_complete(self) -> None:
+        """检查初始化参数是否全部读取完毕"""
+        needed = {addr for addr, _, _, _ in self.INIT_PARAMS}
+        if not needed.issubset(self._init_read_values):
+            return
+        self._init_timeout.stop()
+        self._init_phase = "done"
+
+        diffs: list[str] = []
+        for addr, expected, name, is_32bit in self.INIT_PARAMS:
+            current = self._init_read_values[addr]
+            if current != expected:
+                if is_32bit:
+                    self._write_32bit(addr, expected)
+                else:
+                    self._write_single(addr, expected)
+                diffs.append(f"{name} {current}->{expected}")
+
+        if diffs:
+            self.save_params()
+            msg = "参数已校准并保存: " + ", ".join(diffs)
+        else:
+            msg = "参数检查通过，无需校准"
+        self._init_phase = "idle"
+        self.init_config_done.emit(msg)
+
+    def _on_init_config_timeout(self) -> None:
+        """首次校准读取超时"""
+        self._init_phase = "idle"
+        self.init_config_done.emit("参数校准超时，跳过")
 
     # -- 参数操作 --
 
@@ -281,6 +339,20 @@ class MotorService(QObject):
                         self._homing_read_values[start_addr + i] = val
             if self._homing_phase == "reading":
                 self._check_homing_reads_complete()
+            if self._init_phase == "reading":
+                if (
+                    reg
+                    and reg.data_type in (DataType.UINT32, DataType.INT32)
+                    and len(values) == 2
+                ):
+                    signed = reg.data_type == DataType.INT32
+                    self._init_read_values[start_addr] = ModbusRTU.combine_32bit(
+                        values[0], values[1], signed,
+                    )
+                else:
+                    for i, val in enumerate(values):
+                        self._init_read_values[start_addr + i] = val
+                self._check_init_reads_complete()
         else:
             self.operation_done.emit(True, "操作成功")
 

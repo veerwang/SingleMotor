@@ -60,31 +60,31 @@ HOLDING_REGISTERS: list[RegisterDef] = [
         unit="V", default_val=24, restart_required=True,
         description="电源的电压",
     ),
-    # ── 电流参数 ──
+    # ── 电流参数（单位: x100mA，如 10=1A, 41=4.1A）──
     RegisterDef(
         0x0015, "减速电流", RegisterType.HOLDING, DataType.UINT16, 1,
-        unit="mA", min_val=0, max_val=10000, default_val=1000,
-        description="STM86: 0~10000mA峰值; 非STM86: 0~4000mA峰值",
+        unit="x100mA", min_val=0, max_val=95, default_val=10,
+        description="实际电流=值x100mA; 28系列最大95(9.5A)",
     ),
     RegisterDef(
         0x0016, "怠机电流", RegisterType.HOLDING, DataType.UINT16, 1,
-        unit="mA", min_val=0, max_val=10000, default_val=500,
-        description="STM86: 0~10000mA峰值; 非STM86: 0~4000mA峰值",
+        unit="x100mA", min_val=0, max_val=95, default_val=5,
+        description="实际电流=值x100mA; 电机空闲时的保持电流",
     ),
     RegisterDef(
         0x0017, "加速电流", RegisterType.HOLDING, DataType.UINT16, 1,
-        unit="mA", min_val=0, max_val=10000, default_val=1000,
-        description="STM86: 0~10000mA峰值; 非STM86: 0~4000mA峰值",
+        unit="x100mA", min_val=0, max_val=95, default_val=10,
+        description="实际电流=值x100mA; 加速阶段的最大电流",
     ),
     RegisterDef(
         0x0018, "运行电流", RegisterType.HOLDING, DataType.UINT16, 1,
-        unit="mA", min_val=0, max_val=10000, default_val=1000,
-        description="STM86: 0~10000mA峰值; 非STM86: 0~4000mA峰值",
+        unit="x100mA", min_val=0, max_val=95, default_val=10,
+        description="实际电流=值x100mA; 正常运行时的最大电流",
     ),
     RegisterDef(
         0x0019, "过载电流", RegisterType.HOLDING, DataType.UINT16, 1,
-        unit="100mA", min_val=0, max_val=100, default_val=40,
-        description="非STM86: 100mA单位,375mA~6A,范围0~60,默认40; STM86: 100mA单位,375mA~10A,范围0~100,默认80",
+        unit="x100mA", min_val=0, max_val=95, default_val=40,
+        description="实际电流=值x100mA; 触发过流报警的阈值",
     ),
     # ── 运动参数 ──
     RegisterDef(
