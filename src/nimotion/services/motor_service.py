@@ -10,13 +10,16 @@ from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 from ..communication.modbus_rtu import ModbusRTU
 from ..communication.worker import CommWorker
 from ..models.error_codes import get_error_text, get_exception_text
+from ..models.registers import get_register
 from ..models.types import (
+    DataType,
     FunctionCode,
     HomingConfig,
     ModbusRequest,
     ModbusResponse,
     MotorState,
     MotorStatus,
+    RegisterType,
     RunMode,
 )
 
@@ -255,14 +258,27 @@ class MotorService(QObject):
         if resp.function_code == FunctionCode.READ_INPUT:
             self._parse_status(resp)
         elif resp.function_code == FunctionCode.READ_HOLDING:
-            # 逐个发出 param_read 信号
             if not resp.raw_tx or len(resp.raw_tx) < 4:
                 return
             start_addr = (resp.raw_tx[2] << 8) | resp.raw_tx[3]
-            for i, val in enumerate(resp.values):
-                self.param_read.emit(start_addr + i, val)
+            values = resp.values
+            # 检查是否为 32 位寄存器读取（2 个寄存器）
+            reg = get_register(start_addr, RegisterType.HOLDING)
+            if (
+                reg
+                and reg.data_type in (DataType.UINT32, DataType.INT32)
+                and len(values) == 2
+            ):
+                signed = reg.data_type == DataType.INT32
+                combined = ModbusRTU.combine_32bit(values[0], values[1], signed)
+                self.param_read.emit(start_addr, combined)
                 if self._homing_phase == "reading":
-                    self._homing_read_values[start_addr + i] = val
+                    self._homing_read_values[start_addr] = combined
+            else:
+                for i, val in enumerate(values):
+                    self.param_read.emit(start_addr + i, val)
+                    if self._homing_phase == "reading":
+                        self._homing_read_values[start_addr + i] = val
             if self._homing_phase == "reading":
                 self._check_homing_reads_complete()
         else:

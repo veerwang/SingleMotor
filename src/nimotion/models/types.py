@@ -70,6 +70,7 @@ class RegisterDef:
     description: str = ""
     writable: bool = True
     restart_required: bool = False  # 修改后是否需要重启
+    disable_required: bool = False  # 修改前需要先脱机
 
 
 @dataclass

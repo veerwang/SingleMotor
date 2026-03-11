@@ -89,7 +89,7 @@ HOLDING_REGISTERS: list[RegisterDef] = [
     # ── 运动参数 ──
     RegisterDef(
         0x001A, "细分", RegisterType.HOLDING, DataType.UINT16, 1,
-        min_val=0, max_val=7, default_val=7,
+        min_val=0, max_val=7, default_val=7, disable_required=True,
         description="0=Full 1=Half 2=1:4 3=1:8 4=1:16 5=1:32 6=1:64 7=1:128; 非28系列:0~7, 28系列:0~4",
     ),
     RegisterDef(

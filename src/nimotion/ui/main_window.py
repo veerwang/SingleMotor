@@ -47,14 +47,14 @@ class MainWindow(QMainWindow):
         # Tab 页
         self._tabs = QTabWidget()
 
+        self._motor_tab = MotorTab(self._motor_service)
+        self._tabs.addTab(self._motor_tab, "电机控制")
+
         self._serial_tab = SerialTab(self._worker)
         self._tabs.addTab(self._serial_tab, "串口调试")
 
         self._modbus_tab = ModbusTab(self._worker)
         self._tabs.addTab(self._modbus_tab, "Modbus 调试")
-
-        self._motor_tab = MotorTab(self._motor_service)
-        self._tabs.addTab(self._motor_tab, "电机控制")
 
         layout.addWidget(self._tabs)
         self.setCentralWidget(central)

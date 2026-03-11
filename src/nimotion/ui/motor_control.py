@@ -178,10 +178,6 @@ class MotorControlPanel(QWidget):
         state_layout = QHBoxLayout()
 
         btn_data = [
-            ("一键使能", self._on_quick_enable),
-            ("启动", self._motor.startup),
-            ("使能", self._motor.enable),
-            ("运行", self._motor.run),
             ("停止", self._motor.stop),
             ("急停", self._motor.quick_stop),
             ("脱机", self._motor.disable),
@@ -227,11 +223,6 @@ class MotorControlPanel(QWidget):
         mode = self._mode_combo.currentData()
         self._motor.set_run_mode(mode)
         self._stack.setCurrentIndex(index)
-
-    def _on_quick_enable(self) -> None:
-        """一键使能：启动 + 使能"""
-        self._motor.startup()
-        self._motor.enable()
 
     def _on_operation_done(self, success: bool, message: str) -> None:
         if success:
