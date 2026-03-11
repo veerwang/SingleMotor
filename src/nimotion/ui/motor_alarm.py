@@ -72,12 +72,8 @@ class MotorAlarmPanel(QWidget):
         read_history_btn.clicked.connect(self._on_read_history)
         btn_row.addWidget(read_history_btn)
 
-        clear_history_btn = QPushButton("清除历史报警")
-        clear_history_btn.clicked.connect(self._on_clear_history)
-        btn_row.addWidget(clear_history_btn)
-
-        clear_fault_btn = QPushButton("清除故障状态")
-        clear_fault_btn.clicked.connect(self._motor.clear_fault)
+        clear_fault_btn = QPushButton("清除报警")
+        clear_fault_btn.clicked.connect(self._on_clear_fault)
         btn_row.addWidget(clear_fault_btn)
 
         layout.addLayout(btn_row)
@@ -90,16 +86,12 @@ class MotorAlarmPanel(QWidget):
         """读取历史报警: 先读个数再逐个读"""
         self._motor.read_param(0x0027, 1)
 
-    def _on_clear_history(self) -> None:
-        reply = QMessageBox.question(
-            self,
-            "确认",
-            "确定要清除历史报警记录？",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if reply == QMessageBox.StandardButton.Yes:
-            self._motor.write_param(0x0073, 0x6C64)
-            self._table.setRowCount(0)
+    def _on_clear_fault(self) -> None:
+        """清除故障状态 + 清空错误存储器 + 清除历史报警表格"""
+        self._motor.clear_fault()          # 0x0051 = 0x0080 清除状态机故障位
+        self._motor.write_param(0x0073, 0x6C64)  # 清空错误存储器（含当前报警码）
+        self._table.setRowCount(0)
+        self._update_alarm_display(0)
 
     def _on_status_updated(self, status: MotorStatus) -> None:
         """从定时刷新的状态中更新报警显示"""

@@ -181,7 +181,7 @@ class MotorControlPanel(QWidget):
             ("停止", self._motor.stop),
             ("急停", self._motor.quick_stop),
             ("脱机", self._motor.disable),
-            ("清除故障", self._motor.clear_fault),
+            ("清除报警", self._on_clear_fault),
         ]
         self._state_buttons: list[QPushButton] = []
         for name, handler in btn_data:
@@ -223,6 +223,11 @@ class MotorControlPanel(QWidget):
         mode = self._mode_combo.currentData()
         self._motor.set_run_mode(mode)
         self._stack.setCurrentIndex(index)
+
+    def _on_clear_fault(self) -> None:
+        """清除故障状态 + 清空错误存储器"""
+        self._motor.clear_fault()
+        self._motor.write_param(0x0073, 0x6C64)
 
     def _on_operation_done(self, success: bool, message: str) -> None:
         if success:
