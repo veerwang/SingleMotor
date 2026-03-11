@@ -19,7 +19,7 @@ from ..models.turret import (
     microstep_from_register,
     pulse_to_turret_position,
 )
-from ..models.types import MotorStatus, RunMode
+from ..models.types import HomingConfig, MotorStatus, RunMode
 from ..services.motor_service import MotorService
 from .widgets.turret_widget import TurretWidget
 
@@ -125,12 +125,11 @@ class TurretPanel(QWidget):
     # -- 操作回调 --
 
     def _on_home(self) -> None:
-        """执行归零流程。"""
+        """执行归零流程（含 DI1 临时切换）。"""
         self._set_moving(True)
         self._status_label.setText("正在归零...")
         self._status_label.setStyleSheet("color: #FFA726;")
-        self._motor.set_run_mode(RunMode.HOMING)
-        self._motor.start_homing()
+        self._motor.configure_and_start_homing(HomingConfig())
         self._moving_timer.start(self._MOVING_TIMEOUT_MS)
 
     def _on_switch(self, pos: TurretPosition) -> None:
