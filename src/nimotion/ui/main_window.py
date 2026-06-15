@@ -16,6 +16,7 @@ from ..communication.serial_port import SerialConfig
 from ..communication.worker import CommWorker
 from ..services.motor_service import MotorService
 from .connection_bar import ConnectionBar
+from .integration_test_tab import IntegrationTestTab
 from .modbus_tab import ModbusTab
 from .motor_tab import MotorTab
 from .serial_tab import SerialTab
@@ -49,6 +50,9 @@ class MainWindow(QMainWindow):
 
         self._motor_tab = MotorTab(self._motor_service)
         self._tabs.addTab(self._motor_tab, "电机控制")
+
+        self._test_tab = IntegrationTestTab(self._motor_service)
+        self._tabs.addTab(self._test_tab, "集成测试")
 
         self._serial_tab = SerialTab(self._worker)
         self._tabs.addTab(self._serial_tab, "串口调试")

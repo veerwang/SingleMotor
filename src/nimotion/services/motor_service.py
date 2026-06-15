@@ -32,6 +32,7 @@ class MotorService(QObject):
     param_read = pyqtSignal(int, int)  # (地址, 值)
     operation_done = pyqtSignal(bool, str)  # (成功, 消息)
     homing_config_status = pyqtSignal(str)  # 回零配置状态信息
+    homing_done = pyqtSignal()  # 回零完成且 DI1 已恢复
     init_config_done = pyqtSignal(str)  # 首次连接参数校准完成
 
     # 首次连接期望参数: (地址, 期望值, 名称, 是否32位)
@@ -493,6 +494,7 @@ class MotorService(QObject):
             self._write_32bit(0x002C, restore)
             self._homing_di_restore = None
             self.homing_config_status.emit("回零完成，DI1 已恢复为无动作")
+            self.homing_done.emit()
 
     def _on_homing_config_timeout(self) -> None:
         """回零配置读取超时"""
