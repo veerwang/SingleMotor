@@ -286,6 +286,9 @@ class TurretPanel(QWidget):
         # 运动结束检测（回零结束由 homing_done 判定，此处跳过）
         if self._is_moving and not self._homing and not status.is_running:
             self._moving_timer.stop()
+            # 移动完成后去使能（写 0x0000 脱机），空闲时不保持力矩，靠机械定位保持孔位。
+            # 下次孔位切换/点动的命令序列会自动重新使能。
+            self._motor.disable()
             self._set_moving(False)
             if self._status_label.styleSheet().find("F44336") < 0:
                 self._status_label.setText("")
