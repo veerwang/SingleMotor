@@ -39,12 +39,12 @@ class MotorService(QObject):
     # 寄存器单位 Step/s (全步/秒), 实际 pulses/s = Step/s × 细分数
     INIT_PARAMS: list[tuple[int, int, str, bool]] = [
         (0x001A, 4, "细分", False),          # 寄存器值4 = 细分16 (需重启生效)
-        (0x005F, 600, "加速度", True),      # 600 Step/s² (×16=9600 pulses/s²)
-        (0x0061, 600, "减速度", True),      # 600 Step/s² (×16=9600 pulses/s²)
+        (0x005F, 2000, "加速度", True),     # 2000 Step/s² (28系列硬件上限约2000，≥3000报error3)
+        (0x0061, 2000, "减速度", True),     # 2000 Step/s²
         # 最小速度(起停速度)必须 ≤ 最大速度，否则写最大速度会被拒(非法数据值)。
-        # 必须排在最大速度之前先写小，再写最大速度=60 才能通过。
+        # 必须排在最大速度之前先写小，再写最大速度 才能通过。
         (0x005D, 16, "最小速度", True),     # 16 Step/s (手册默认，起停速度)
-        (0x005B, 60, "最大速度", True),     # 60 Step/s (×16=960 pulses/s)
+        (0x005B, 600, "最大速度", True),    # 600 Step/s (×16=9600 pulses/s ≈ 393°/s转盘)
     ]
 
     def __init__(self, worker: CommWorker, slave_id: int = 1) -> None:
