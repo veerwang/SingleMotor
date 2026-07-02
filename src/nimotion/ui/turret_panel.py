@@ -55,6 +55,7 @@ class TurretPanel(QWidget):
     _PARAM_READ_TIMEOUT_MS = 3000  # 参数读取超时（毫秒）
     _MOVING_TIMEOUT_MS = 30000  # 普通移动(点动/切换)超时（毫秒）
     _HOME_TIMEOUT_MS = 60000  # 回零超时（回零较慢，尤其降速后，独立于普通移动超时）
+    _SETTLE_MS = 800  # 移动启动缓冲：此期间不接受"停止"判定，避免启动前在途的过期状态帧误判完成
     _DEFAULT_JOG_STEP = 50  # 默认点动步进（脉冲）
 
     def __init__(self, motor_service: MotorService, parent: QWidget | None = None) -> None:
@@ -75,6 +76,12 @@ class TurretPanel(QWidget):
         self._moving_timer = QTimer(self)
         self._moving_timer.setSingleShot(True)
         self._moving_timer.timeout.connect(self._on_moving_timeout)
+
+        # 移动启动缓冲：防止启动瞬间在途的过期状态帧被误判为"移动完成"而提前去使能
+        self._settling = False
+        self._settle_timer = QTimer(self)
+        self._settle_timer.setSingleShot(True)
+        self._settle_timer.timeout.connect(self._on_settle_done)
 
         self._calibration = load_calibration()
         self._init_ui()
@@ -206,6 +213,7 @@ class TurretPanel(QWidget):
             return
         step = self._jog_step_spin.value() * direction
         self._set_moving(True)
+        self._begin_settle()
         self._status_label.setText(f"点动 {step:+d} pulse...")
         self._status_label.setStyleSheet("color: #FFA726;")
         self._motor.move_relative(step)
@@ -223,6 +231,7 @@ class TurretPanel(QWidget):
         """切换到指定物镜位置（使用标定的绝对脉冲值）。"""
         target = self._pos_spins[pos].value()
         self._set_moving(True)
+        self._begin_settle()
         self._status_label.setText(f"正在切换到{self._POS_LABELS[pos]}...")
         self._status_label.setStyleSheet("color: #FFA726;")
         self._motor.move_absolute(target)
@@ -285,7 +294,14 @@ class TurretPanel(QWidget):
                 )
 
         # 运动结束检测（回零结束由 homing_done 判定，此处跳过）
-        if self._is_moving and not self._homing and not status.is_running:
+        # settle 期内不判定完成：避免启动前在途的过期状态帧(is_running=False)误判为
+        # 移动结束而提前 disable() 打断刚发出的运动。
+        if (
+            self._is_moving
+            and not self._homing
+            and not self._settling
+            and not status.is_running
+        ):
             self._moving_timer.stop()
             # 移动完成后去使能（写 0x0000 脱机），空闲时不保持力矩，靠机械定位保持孔位。
             # 下次孔位切换/点动的命令序列会自动重新使能。
@@ -318,10 +334,21 @@ class TurretPanel(QWidget):
         self._status_label.setText("运动超时")
         self._status_label.setStyleSheet("color: #F44336;")
 
+    def _begin_settle(self) -> None:
+        """移动启动缓冲：settle 期内忽略"停止"判定。"""
+        self._settling = True
+        self._settle_timer.start(self._SETTLE_MS)
+
+    def _on_settle_done(self) -> None:
+        """启动缓冲结束，之后才接受"移动完成"判定。"""
+        self._settling = False
+
     def _on_disconnected(self) -> None:
         """设备断连处理。"""
         self._param_timer.stop()
         self._moving_timer.stop()
+        self._settle_timer.stop()
+        self._settling = False
         self._homing = False
         if self._is_moving:
             self._set_moving(False)
