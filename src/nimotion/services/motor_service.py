@@ -533,4 +533,10 @@ class MotorService(QObject):
             return "通讯超时"
         if resp.error_code == -3:
             return "响应帧不完整"
-        return f"Modbus 异常: {get_exception_text(resp.error_code)}"
+        # 附带触发异常的功能码与寄存器地址，便于定位是哪条报文被拒
+        detail = ""
+        if len(resp.raw_tx) >= 4:
+            func = resp.raw_tx[1]
+            addr = (resp.raw_tx[2] << 8) | resp.raw_tx[3]
+            detail = f" [功能码 0x{func:02X} 地址 0x{addr:04X}]"
+        return f"Modbus 异常: {get_exception_text(resp.error_code)}{detail}"
