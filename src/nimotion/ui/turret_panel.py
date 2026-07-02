@@ -53,7 +53,8 @@ class TurretPanel(QWidget):
     }
 
     _PARAM_READ_TIMEOUT_MS = 3000  # 参数读取超时（毫秒）
-    _MOVING_TIMEOUT_MS = 30000  # 运动超时（毫秒）
+    _MOVING_TIMEOUT_MS = 30000  # 普通移动(点动/切换)超时（毫秒）
+    _HOME_TIMEOUT_MS = 60000  # 回零超时（回零较慢，尤其降速后，独立于普通移动超时）
     _DEFAULT_JOG_STEP = 50  # 默认点动步进（脉冲）
 
     def __init__(self, motor_service: MotorService, parent: QWidget | None = None) -> None:
@@ -197,7 +198,7 @@ class TurretPanel(QWidget):
         self._status_label.setText("正在归零...")
         self._status_label.setStyleSheet("color: #FFA726;")
         self._motor.configure_and_start_homing(HomingConfig())
-        self._moving_timer.start(self._MOVING_TIMEOUT_MS)
+        self._moving_timer.start(self._HOME_TIMEOUT_MS)
 
     def _on_jog(self, direction: int) -> None:
         """点动：相对移动一个步进，用于对位标定。"""
