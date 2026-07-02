@@ -63,6 +63,8 @@ class MotorService(QObject):
         self._homing_timeout.timeout.connect(self._on_homing_config_timeout)
         # 回零完成后恢复 DI1 的轮询
         self._homing_di_restore: int | None = None
+        # 回零是否已真正跑起来(见过 is_running=True)，防止触发后未起转的空闲帧被误判为完成
+        self._homing_seen_running = False
         # 回零使用的加减速为全局共用寄存器(0x005F/0x0061)，回零前改小、完成后恢复原值
         self._homing_accel_restore: int | None = None
         self._homing_decel_restore: int | None = None
@@ -503,8 +505,9 @@ class MotorService(QObject):
         else:
             self.homing_config_status.emit("参数已一致，无需写入")
 
-        # 启动回零；完成后通过 _on_response 监测状态字恢复 DI1
+        # 启动回零；完成后通过 status_updated 监测状态字恢复 DI1
         self._homing_di_restore = dev_di_func  # 记录原始 DI 配置
+        self._homing_seen_running = False  # 等回零真正跑起来再判定完成
         self.start_homing()
 
     def _poll_homing_done(self) -> None:
@@ -515,7 +518,13 @@ class MotorService(QObject):
         """由 status_updated 信号触发，检测回零完成"""
         if self._homing_di_restore is None:
             return
-        if not status.is_running and status.speed == 0:
+        # 必须先看到"运行中"，才认可之后的"停止"为回零完成；否则触发回零后电机尚未
+        # 起转的空闲帧(is_running=False)会被误判为立即完成(表现为第一次回零秒返回成功、
+        # 实际没动，第二次才真回零)。
+        if status.is_running:
+            self._homing_seen_running = True
+            return
+        if self._homing_seen_running and status.speed == 0:
             self._homing_poll_timer.stop()
             # 先停机，避免写 DI 时 error=6 (slave busy)
             self._write_control_word(0x0000)

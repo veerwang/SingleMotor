@@ -162,6 +162,35 @@ class TestMotionControl:
             assert mock_send.call_args_list[4][0][0].values == [0x000F]
             assert mock_send.call_args_list[5][0][0].values == [0x001F]
 
+    def test_homing_ignores_premature_idle(self, service, mock_worker):
+        """回零触发后未起转的空闲帧不得被误判为完成(修偶发秒成功、没动)。"""
+        done = []
+        service.homing_done.connect(lambda: done.append(True))
+        with patch.object(mock_worker, "send_modbus"):
+            # 模拟回零已启动(armed)
+            service._homing_di_restore = 0x00000001
+            service._homing_seen_running = False
+            # 触发后电机尚未起转的空闲帧 -> 不应完成
+            s0 = MotorStatus()
+            s0.is_running = False
+            s0.speed = 0
+            service._check_homing_running(s0)
+            assert done == []
+            assert service._homing_di_restore is not None  # 仍在回零中
+            # 电机真正起转
+            s1 = MotorStatus()
+            s1.is_running = True
+            s1.speed = 50
+            service._check_homing_running(s1)
+            assert service._homing_seen_running is True
+            # 之后停下 -> 真正完成
+            s2 = MotorStatus()
+            s2.is_running = False
+            s2.speed = 0
+            service._check_homing_running(s2)
+            assert done == [True]
+            assert service._homing_di_restore is None
+
 
 class TestParamOperations:
     def test_read_param(self, service, mock_worker):
