@@ -403,6 +403,8 @@ class MotorService(QObject):
         status.status_word = vals[8]
         status.state = self._decode_state(vals[8])
         status.is_running = bool(vals[8] & (1 << 12))
+        # vals[1] = 0x18 高16位 = DI 原始电平 (bit0=DI1)
+        status.di_status = vals[1]
         # vals[9] = 0x20 (方向)
         status.direction = vals[9]
         # vals[10], vals[11] = 0x21~0x22 (位置, 32位)

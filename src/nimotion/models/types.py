@@ -129,3 +129,4 @@ class MotorStatus:
     alarm_code: int = 0
     alarm_text: str = ""
     is_running: bool = False  # 状态字 bit12
+    di_status: int = 0  # 0x0018 高16位 DI 原始电平 (bit0=DI1 ... bit3=DI4)

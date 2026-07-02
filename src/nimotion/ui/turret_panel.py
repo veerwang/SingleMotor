@@ -23,6 +23,7 @@ from ..models.turret import (
     save_calibration,
 )
 from ..models.types import HomingConfig, MotorStatus
+from ..services.home_search import HomeSearch
 from ..services.motor_service import MotorService
 from .widgets.turret_widget import TurretWidget
 
@@ -64,6 +65,7 @@ class TurretPanel(QWidget):
         self._homed = False
         self._is_moving = False
         self._homing = False  # 回零进行中（用回零完成信号判定结束，而非状态位）
+        self._searching = False  # 软件搜索测距进行中
         self._microstep: int | None = None
         self._last_position = 0  # 最近一次实时电机位置，用于标定捕获
 
@@ -82,6 +84,12 @@ class TurretPanel(QWidget):
         self._settle_timer = QTimer(self)
         self._settle_timer.setSingleShot(True)
         self._settle_timer.timeout.connect(self._on_settle_done)
+
+        # 软件搜索测距控制器
+        self._search = HomeSearch(self._motor, di_bit=0, parent=self)
+        self._search.finished.connect(self._on_search_finished)
+        self._search.failed.connect(self._on_search_failed)
+        self._search.progress.connect(self._on_search_progress)
 
         self._calibration = load_calibration()
         self._init_ui()
@@ -156,6 +164,22 @@ class TurretPanel(QWidget):
         jog_group.setLayout(jog_layout)
         right.addWidget(jog_group)
 
+        # 感应点测距(软件搜索)组
+        search_group = QGroupBox("感应点测距(软件搜索)")
+        search_layout = QVBoxLayout()
+        self._search_btn = QPushButton("测量当前位置 → 感应点")
+        self._search_btn.setEnabled(False)
+        self._search_btn.setToolTip(
+            "清零当前位置 → 小步搜索到 homing 感应点(DI1) → 显示走过的脉冲距离"
+        )
+        self._search_btn.clicked.connect(self._on_search)
+        search_layout.addWidget(self._search_btn)
+        self._search_result = QLabel("距离: --")
+        self._search_result.setStyleSheet("font-family: monospace;")
+        search_layout.addWidget(self._search_result)
+        search_group.setLayout(search_layout)
+        right.addWidget(search_group)
+
         # 物镜切换 + 标定组
         switch_group = QGroupBox("物镜切换 / 标定")
         switch_layout = QVBoxLayout()
@@ -227,6 +251,37 @@ class TurretPanel(QWidget):
         )
         self._status_label.setStyleSheet("color: #66BB6A;")
 
+    def _on_search(self) -> None:
+        """软件搜索：清零 → 搜索到感应点 → 显示当前位置到感应点的距离。"""
+        if self._searching or self._microstep is None:
+            return
+        self._searching = True
+        self._search_result.setText("距离: 测量中...")
+        self._status_label.setText("软件搜索感应点中...")
+        self._status_label.setStyleSheet("color: #FFA726;")
+        self._update_controls()
+        # 整定时长按 最大速度×细分 估算脉冲/秒(最大速度默认 60 Step/s)
+        pps = 60 * self._microstep
+        self._search.start(pulses_per_sec=pps, return_to_start=True)
+
+    def _on_search_finished(self, distance: int) -> None:
+        self._searching = False
+        deg = distance * 360 / 8800
+        self._search_result.setText(f"距离: {distance} pulse  (≈{deg:.2f}°)")
+        self._status_label.setText("测距完成，已返回起点")
+        self._status_label.setStyleSheet("color: #66BB6A;")
+        self._update_controls()
+
+    def _on_search_failed(self, reason: str) -> None:
+        self._searching = False
+        self._search_result.setText("距离: 失败")
+        self._status_label.setText(f"测距失败: {reason}")
+        self._status_label.setStyleSheet("color: #F44336;")
+        self._update_controls()
+
+    def _on_search_progress(self, position: int) -> None:
+        self._search_result.setText(f"距离: 搜索中... 位置={position}")
+
     def _on_switch(self, pos: TurretPosition) -> None:
         """切换到指定物镜位置（使用标定的绝对脉冲值）。"""
         target = self._pos_spins[pos].value()
@@ -259,7 +314,6 @@ class TurretPanel(QWidget):
             spin.setValue(effective[pos])
             spin.blockSignals(False)
         self._status_label.setText("")
-        self._home_btn.setEnabled(True)
         self._update_controls()
 
     def _on_homing_done(self) -> None:
@@ -350,6 +404,9 @@ class TurretPanel(QWidget):
         self._settle_timer.stop()
         self._settling = False
         self._homing = False
+        if self._searching:
+            self._search.cancel()
+            self._searching = False
         if self._is_moving:
             self._set_moving(False)
         self._status_label.setText("设备已断开")
@@ -366,18 +423,23 @@ class TurretPanel(QWidget):
     def _set_moving(self, moving: bool) -> None:
         """设置运动状态，更新按钮可用性。"""
         self._is_moving = moving
-        self._home_btn.setEnabled(not moving and self._microstep is not None)
         self._update_controls()
 
     def _update_controls(self) -> None:
-        """根据归零状态和运动状态更新点动/切换/标定控件。"""
-        ready = self._microstep is not None and not self._is_moving
-        # 点动只需参数就绪（对位需在回零后进行，但也允许连接后手动点动）
-        self._jog_neg_btn.setEnabled(ready and self._homed)
-        self._jog_pos_btn.setEnabled(ready and self._homed)
+        """根据归零/运动/搜索状态更新各控件可用性。"""
+        idle = (
+            self._microstep is not None
+            and not self._is_moving
+            and not self._searching
+        )
+        self._home_btn.setEnabled(idle)
+        self._search_btn.setEnabled(idle)  # 软件测距无需先回零，参数就绪即可
+        # 点动/切换/标定需已归零
+        self._jog_neg_btn.setEnabled(idle and self._homed)
+        self._jog_pos_btn.setEnabled(idle and self._homed)
         for pos in _SLOTS:
-            self._switch_btns[pos].setEnabled(ready and self._homed)
-            self._teach_btns[pos].setEnabled(ready and self._homed)
+            self._switch_btns[pos].setEnabled(idle and self._homed)
+            self._teach_btns[pos].setEnabled(idle and self._homed)
 
     def _save_calibration(self) -> None:
         """将各孔位 spinbox 的绝对脉冲值保存到 JSON。"""
