@@ -46,7 +46,7 @@ class TurretPanel(QWidget):
     """
 
     _POS_LABELS = {
-        TurretPosition.POS_1: "位置 1 (Home)",
+        TurretPosition.POS_1: "位置 1",
         TurretPosition.POS_2: "位置 2",
         TurretPosition.POS_3: "位置 3",
         TurretPosition.POS_4: "位置 4",
