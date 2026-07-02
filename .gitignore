@@ -13,3 +13,7 @@ build/
 venv/
 *.so
 .env
+
+# 运行时用户配置（孔位标定等）
+turret_calibration.json
+turret_offsets.json

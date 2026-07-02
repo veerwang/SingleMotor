@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from enum import IntEnum
+from pathlib import Path
 
 # -- 齿轮机械参数 --
 GEAR_RATIO = 132 / 48  # 齿轮比 = 2.75
@@ -75,6 +77,68 @@ def calculate_position_pulses(microstep: int) -> dict[TurretPosition, int]:
         TurretPosition.POS_3: ppp * 2,
         TurretPosition.POS_4: ppp * 3,
     }
+
+
+# -- 孔位标定（回零点→各孔位实测绝对脉冲）持久化 --
+#
+# 回零点通常不等于孔位 1 的物理位置。用户在 GUI 上点动对位后，
+# 把当前电机绝对位置标定为该孔位目标，持久化到此文件。移动时直接
+# 用标定的绝对脉冲值 move_absolute，未标定的孔位回退到理论计算值。
+CALIBRATION_FILE = Path(__file__).resolve().parents[3] / "turret_calibration.json"
+
+
+def load_calibration(path: Path = CALIBRATION_FILE) -> dict[TurretPosition, int]:
+    """从 JSON 加载已标定的孔位绝对脉冲值。
+
+    Returns:
+        {孔位: 绝对脉冲}，仅包含文件中存在的孔位；文件缺失或损坏时返回空字典。
+    """
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    result: dict[TurretPosition, int] = {}
+    for pos in TurretPosition:
+        if pos == TurretPosition.UNKNOWN:
+            continue
+        raw = data.get(str(int(pos)))
+        if raw is None:
+            continue
+        try:
+            result[pos] = int(raw)
+        except (TypeError, ValueError):
+            continue
+    return result
+
+
+def save_calibration(
+    calibration: dict[TurretPosition, int], path: Path = CALIBRATION_FILE
+) -> None:
+    """将孔位标定绝对脉冲值写入 JSON。"""
+    data = {str(int(pos)): int(val) for pos, val in calibration.items()}
+    path.write_text(
+        json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+
+
+def effective_position_pulses(
+    microstep: int, calibration: dict[TurretPosition, int] | None = None
+) -> dict[TurretPosition, int]:
+    """计算实际用于移动的孔位绝对脉冲：已标定用标定值，否则用理论值。
+
+    Args:
+        microstep: 实际细分数
+        calibration: 已标定孔位绝对脉冲（可为 None 或部分孔位）
+
+    Returns:
+        各孔位最终采用的绝对脉冲数
+    """
+    theoretical = calculate_position_pulses(microstep)
+    if not calibration:
+        return theoretical
+    return {pos: calibration.get(pos, theoretical[pos]) for pos in theoretical}
 
 
 def pulse_to_turret_position(

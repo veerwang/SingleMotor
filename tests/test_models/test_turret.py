@@ -1,6 +1,7 @@
 """物镜转盘模型单元测试"""
 
 import pytest
+
 from nimotion.models.turret import (
     GEAR_RATIO,
     MICROSTEP_REG_ADDR,
@@ -9,8 +10,11 @@ from nimotion.models.turret import (
     TurretPosition,
     calculate_position_pulses,
     calculate_pulses_per_position,
+    effective_position_pulses,
+    load_calibration,
     microstep_from_register,
     pulse_to_turret_position,
+    save_calibration,
 )
 
 
@@ -144,3 +148,45 @@ class TestPulseToTurretPosition:
         assert pulse_to_turret_position(6600, pp) == TurretPosition.POS_4
         # 原来 microstep=128 的 17600 在 microstep=16 下应该 UNKNOWN
         assert pulse_to_turret_position(17600, pp) == TurretPosition.UNKNOWN
+
+
+class TestCalibration:
+    """孔位标定持久化与有效位置计算。"""
+
+    def test_load_missing_file_returns_empty(self, tmp_path):
+        assert load_calibration(tmp_path / "nope.json") == {}
+
+    def test_save_then_load_roundtrip(self, tmp_path):
+        f = tmp_path / "calib.json"
+        calib = {
+            TurretPosition.POS_1: 300,
+            TurretPosition.POS_2: 2500,
+            TurretPosition.POS_3: 4700,
+            TurretPosition.POS_4: 6900,
+        }
+        save_calibration(calib, f)
+        assert load_calibration(f) == calib
+
+    def test_load_ignores_unknown_and_bad_values(self, tmp_path):
+        f = tmp_path / "calib.json"
+        f.write_text('{"0": 100, "1": "oops", "-1": 5}', encoding="utf-8")
+        loaded = load_calibration(f)
+        assert loaded == {TurretPosition.POS_1: 100}
+
+    def test_load_corrupt_json_returns_empty(self, tmp_path):
+        f = tmp_path / "calib.json"
+        f.write_text("{not json", encoding="utf-8")
+        assert load_calibration(f) == {}
+
+    def test_effective_no_calibration_uses_theoretical(self):
+        assert effective_position_pulses(16, None) == calculate_position_pulses(16)
+        assert effective_position_pulses(16, {}) == calculate_position_pulses(16)
+
+    def test_effective_partial_calibration_falls_back(self):
+        # 只标定了 POS_1（回零点≠孔位1），其余回退理论值
+        eff = effective_position_pulses(16, {TurretPosition.POS_1: 350})
+        theo = calculate_position_pulses(16)
+        assert eff[TurretPosition.POS_1] == 350
+        assert eff[TurretPosition.POS_2] == theo[TurretPosition.POS_2]
+        assert eff[TurretPosition.POS_3] == theo[TurretPosition.POS_3]
+        assert eff[TurretPosition.POS_4] == theo[TurretPosition.POS_4]

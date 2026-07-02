@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QIntValidator
 from PyQt5.QtWidgets import (
@@ -20,7 +17,8 @@ from PyQt5.QtWidgets import (
 from ..models.turret import (
     MICROSTEP_REG_ADDR,
     TurretPosition,
-    calculate_position_pulses,
+    effective_position_pulses,
+    load_calibration,
     microstep_from_register,
 )
 from ..models.types import HomingConfig, MotorStatus
@@ -64,11 +62,10 @@ class IntegrationTestTab(QWidget):
     _MOVE_TIMEOUT_MS = 30000  # 单次移动超时
     _HOME_TIMEOUT_MS = 60000  # 单次回零超时
 
-    _OFFSETS_FILE = Path(__file__).resolve().parents[3] / "turret_offsets.json"
-
     def __init__(self, motor_service: MotorService, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._motor = motor_service
+        self._microstep: int | None = None
         self._position_pulses: dict[TurretPosition, int] | None = None
 
         # 测试运行状态
@@ -159,23 +156,13 @@ class IntegrationTestTab(QWidget):
         if address != MICROSTEP_REG_ADDR:
             return
         try:
-            microstep = microstep_from_register(value)
+            self._microstep = microstep_from_register(value)
         except ValueError:
             return
-        self._position_pulses = calculate_position_pulses(microstep)
-
-    def _load_offsets(self) -> dict[TurretPosition, int]:
-        """从 turret_offsets.json 读取各孔位机械偏移（只读，与转盘页一致）。"""
-        offsets = {pos: 0 for pos in TurretPosition if pos != TurretPosition.UNKNOWN}
-        if not self._OFFSETS_FILE.exists():
-            return offsets
-        try:
-            data = json.loads(self._OFFSETS_FILE.read_text(encoding="utf-8"))
-            for pos in offsets:
-                offsets[pos] = int(data.get(str(int(pos)), 0))
-        except (json.JSONDecodeError, ValueError):
-            pass
-        return offsets
+        # 采用与转盘页一致的标定绝对脉冲（未标定回退理论值）
+        self._position_pulses = effective_position_pulses(
+            self._microstep, load_calibration()
+        )
 
     # -- 开始 / 停止 --
 
@@ -195,7 +182,11 @@ class IntegrationTestTab(QWidget):
             self._set_status("循环次数不能为负", error=True)
             return
 
-        self._offsets = self._load_offsets()
+        # 重新按最新标定值刷新孔位目标（用户可能刚在转盘页标定过）
+        if self._microstep is not None:
+            self._position_pulses = effective_position_pulses(
+                self._microstep, load_calibration()
+            )
         self._target_loops = count
         self._loop_done = 0
         self._step_idx = 0
@@ -239,7 +230,7 @@ class IntegrationTestTab(QWidget):
             self._motor.configure_and_start_homing(HomingConfig())
         else:
             assert self._position_pulses is not None
-            target = self._position_pulses[step] + self._offsets.get(step, 0)
+            target = self._position_pulses[step]
             self._phase = "wait_start"
             self._step_label.setText(f"步骤: 切换到{_STEP_LABELS[step]}...")
             self._step_timer.start(self._MOVE_TIMEOUT_MS)
