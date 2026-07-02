@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
+    QDoubleSpinBox,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -14,12 +15,16 @@ from PyQt5.QtWidgets import (
 )
 
 from ..models.turret import (
+    BACKLASH_MAX_DEG,
     MICROSTEP_REG_ADDR,
     TurretPosition,
+    backlash_deg_to_pulses,
     effective_position_pulses,
+    load_backlash_deg,
     load_calibration,
     microstep_from_register,
     pulse_to_turret_position,
+    save_backlash_deg,
     save_calibration,
 )
 from ..models.types import HomingConfig, MotorStatus
@@ -68,6 +73,7 @@ class TurretPanel(QWidget):
         self._searching = False  # 软件搜索测距进行中
         self._microstep: int | None = None
         self._last_position = 0  # 最近一次实时电机位置，用于标定捕获
+        self._pending_final: int | None = None  # 回程间隙补偿：预移动后待发的最终目标
 
         # 参数读取超时定时器
         self._param_timer = QTimer(self)
@@ -180,6 +186,29 @@ class TurretPanel(QWidget):
         search_group.setLayout(search_layout)
         right.addWidget(search_group)
 
+        # 回程间隙补偿组(以转盘角度设置，切孔位时统一从下方单向逼近)
+        backlash_group = QGroupBox("回程间隙补偿")
+        backlash_layout = QHBoxLayout()
+        backlash_layout.addWidget(QLabel("补偿角度:"))
+        self._backlash_spin = QDoubleSpinBox()
+        self._backlash_spin.setRange(0.0, BACKLASH_MAX_DEG)
+        self._backlash_spin.setDecimals(2)
+        self._backlash_spin.setSingleStep(0.01)
+        self._backlash_spin.setSuffix(" °")
+        self._backlash_spin.setValue(load_backlash_deg())
+        self._backlash_spin.setToolTip(
+            "转盘回程间隙补偿角度(0~1°)。>0 时切孔位统一从下方过冲再压回，"
+            "消除齿轮间隙；0=不补偿(直接定位)"
+        )
+        self._backlash_spin.valueChanged.connect(self._on_backlash_changed)
+        backlash_layout.addWidget(self._backlash_spin)
+        self._backlash_pulse_label = QLabel("")
+        self._backlash_pulse_label.setStyleSheet("color: #888;")
+        backlash_layout.addWidget(self._backlash_pulse_label)
+        backlash_layout.addStretch()
+        backlash_group.setLayout(backlash_layout)
+        right.addWidget(backlash_group)
+
         # 物镜切换 + 标定组
         switch_group = QGroupBox("物镜切换 / 标定")
         switch_layout = QVBoxLayout()
@@ -282,14 +311,38 @@ class TurretPanel(QWidget):
     def _on_search_progress(self, position: int) -> None:
         self._search_result.setText(f"距离: 搜索中... 位置={position}")
 
+    def _on_backlash_changed(self) -> None:
+        save_backlash_deg(self._backlash_spin.value())
+        self._update_backlash_label()
+
+    def _backlash_pulses(self) -> int:
+        """当前补偿角度换算的脉冲数(细分未就绪返回 0)。"""
+        if self._microstep is None:
+            return 0
+        return backlash_deg_to_pulses(self._backlash_spin.value(), self._microstep)
+
+    def _update_backlash_label(self) -> None:
+        p = self._backlash_pulses()
+        self._backlash_pulse_label.setText(f"≈ {p} pulse" if p else "(不补偿)")
+
     def _on_switch(self, pos: TurretPosition) -> None:
-        """切换到指定物镜位置（使用标定的绝对脉冲值）。"""
+        """切换到指定物镜位置（使用标定的绝对脉冲值）。
+
+        回程间隙补偿>0 时：先过冲到 目标−补偿(下方)，再正向压到目标，使最终逼近
+        方向统一(从下方)，消除齿轮间隙；补偿=0 时直接绝对定位。
+        """
         target = self._pos_spins[pos].value()
+        comp = self._backlash_pulses()
         self._set_moving(True)
         self._begin_settle()
         self._status_label.setText(f"正在切换到{self._POS_LABELS[pos]}...")
         self._status_label.setStyleSheet("color: #FFA726;")
-        self._motor.move_absolute(target)
+        if comp > 0:
+            self._pending_final = target
+            self._motor.move_absolute(target - comp)  # 预移动：过冲到下方
+        else:
+            self._pending_final = None
+            self._motor.move_absolute(target)
         self._moving_timer.start(self._MOVING_TIMEOUT_MS)
 
     # -- 信号处理 --
@@ -314,6 +367,7 @@ class TurretPanel(QWidget):
             spin.setValue(effective[pos])
             spin.blockSignals(False)
         self._status_label.setText("")
+        self._update_backlash_label()
         self._update_controls()
 
     def _on_homing_done(self) -> None:
@@ -356,6 +410,14 @@ class TurretPanel(QWidget):
             and not self._settling
             and not status.is_running
         ):
+            # 回程间隙补偿：预移动(过冲到下方)完成后，再从下方正向压到最终目标
+            if self._pending_final is not None:
+                final = self._pending_final
+                self._pending_final = None
+                self._begin_settle()
+                self._motor.move_absolute(final)
+                self._moving_timer.start(self._MOVING_TIMEOUT_MS)
+                return
             self._moving_timer.stop()
             # 移动完成后去使能（写 0x0000 脱机），空闲时不保持力矩，靠机械定位保持孔位。
             # 下次孔位切换/点动的命令序列会自动重新使能。
@@ -370,6 +432,7 @@ class TurretPanel(QWidget):
             self._status_label.setText(message)
             self._status_label.setStyleSheet("color: #F44336;")
             self._homing = False
+            self._pending_final = None
             self._set_moving(False)
 
     def _on_param_timeout(self) -> None:
@@ -384,6 +447,7 @@ class TurretPanel(QWidget):
         if not self._is_moving:
             return
         self._homing = False
+        self._pending_final = None
         self._set_moving(False)
         self._status_label.setText("运动超时")
         self._status_label.setStyleSheet("color: #F44336;")
@@ -404,6 +468,7 @@ class TurretPanel(QWidget):
         self._settle_timer.stop()
         self._settling = False
         self._homing = False
+        self._pending_final = None
         if self._searching:
             self._search.cancel()
             self._searching = False

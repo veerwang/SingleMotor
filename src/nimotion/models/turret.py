@@ -123,6 +123,38 @@ def save_calibration(
     )
 
 
+# -- 回程间隙补偿(以转盘角度设置，范围 0.00~1.00°，默认 0) --
+BACKLASH_FILE = Path(__file__).resolve().parents[3] / "turret_backlash.json"
+BACKLASH_MAX_DEG = 1.0
+
+
+def load_backlash_deg(path: Path = BACKLASH_FILE) -> float:
+    """加载回程间隙补偿角度(°)。文件缺失/损坏返回 0.0。"""
+    if not path.exists():
+        return 0.0
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        deg = float(data.get("backlash_deg", 0.0))
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return 0.0
+    return max(0.0, min(BACKLASH_MAX_DEG, deg))
+
+
+def save_backlash_deg(deg: float, path: Path = BACKLASH_FILE) -> None:
+    """保存回程间隙补偿角度(°)。"""
+    deg = max(0.0, min(BACKLASH_MAX_DEG, float(deg)))
+    path.write_text(
+        json.dumps({"backlash_deg": round(deg, 3)}, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
+def backlash_deg_to_pulses(deg: float, microstep: int) -> int:
+    """将转盘角度(°)换算为电机脉冲数(转盘整圈 = 4×每孔90°脉冲)。"""
+    turret_rev_pulses = 4 * calculate_pulses_per_position(microstep)
+    return round(deg / 360.0 * turret_rev_pulses)
+
+
 def effective_position_pulses(
     microstep: int, calibration: dict[TurretPosition, int] | None = None
 ) -> dict[TurretPosition, int]:

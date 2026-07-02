@@ -3,17 +3,21 @@
 import pytest
 
 from nimotion.models.turret import (
+    BACKLASH_MAX_DEG,
     GEAR_RATIO,
     MICROSTEP_REG_ADDR,
     MOTOR_STEPS_PER_REV,
     POSITION_TOLERANCE,
     TurretPosition,
+    backlash_deg_to_pulses,
     calculate_position_pulses,
     calculate_pulses_per_position,
     effective_position_pulses,
+    load_backlash_deg,
     load_calibration,
     microstep_from_register,
     pulse_to_turret_position,
+    save_backlash_deg,
     save_calibration,
 )
 
@@ -190,3 +194,37 @@ class TestCalibration:
         assert eff[TurretPosition.POS_2] == theo[TurretPosition.POS_2]
         assert eff[TurretPosition.POS_3] == theo[TurretPosition.POS_3]
         assert eff[TurretPosition.POS_4] == theo[TurretPosition.POS_4]
+
+
+class TestBacklash:
+    """回程间隙补偿：角度持久化 + 角度→脉冲换算。"""
+
+    def test_deg_to_pulses_microstep16(self):
+        # 转盘整圈=8800脉冲(ms16), 1° = 8800/360 ≈ 24.44 → 24
+        assert backlash_deg_to_pulses(1.0, 16) == 24
+        assert backlash_deg_to_pulses(0.0, 16) == 0
+        assert backlash_deg_to_pulses(0.5, 16) == 12  # 12.22 → 12
+
+    def test_deg_to_pulses_scales_with_microstep(self):
+        # ms32 整圈=17600, 1° ≈ 48.9 → 49
+        assert backlash_deg_to_pulses(1.0, 32) == 49
+
+    def test_load_missing_returns_zero(self, tmp_path):
+        assert load_backlash_deg(tmp_path / "none.json") == 0.0
+
+    def test_save_load_roundtrip(self, tmp_path):
+        f = tmp_path / "bl.json"
+        save_backlash_deg(0.37, f)
+        assert load_backlash_deg(f) == 0.37
+
+    def test_clamped_to_range(self, tmp_path):
+        f = tmp_path / "bl.json"
+        save_backlash_deg(5.0, f)          # 超上限 → 夹到 1.0
+        assert load_backlash_deg(f) == BACKLASH_MAX_DEG
+        save_backlash_deg(-1.0, f)         # 负 → 夹到 0
+        assert load_backlash_deg(f) == 0.0
+
+    def test_load_corrupt_returns_zero(self, tmp_path):
+        f = tmp_path / "bl.json"
+        f.write_text("{bad", encoding="utf-8")
+        assert load_backlash_deg(f) == 0.0
