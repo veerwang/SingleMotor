@@ -135,10 +135,17 @@ class MotorService(QObject):
     # -- 运动控制 --
 
     def move_relative(self, position: int) -> None:
-        """相对位置运动"""
+        """相对位置运动。
+
+        本驱动器相对模式的方向由 0x0052(0=反转/1=正转)决定，0x0053 只作
+        正的步长幅值——写负数会被当成非法幅值而不动。因此按 position 的
+        正负设置方向寄存器（正=正转/位置增大），幅值取绝对值。
+        """
+        direction = 1 if position >= 0 else 0
         self._write_control_word(0x0000)  # 先停机
         self._write_single(0x0039, int(RunMode.POSITION))  # 设置位置模式
-        self._write_32bit(0x0053, position, signed=True)
+        self._write_single(0x0052, direction)  # 运行方向: 正数=正转(位置增大)
+        self._write_32bit(0x0053, abs(position))  # 步长幅值(必须为正)
         self._write_control_word(0x0006)  # 启动
         self._write_control_word(0x0007)  # 使能
         self._write_control_word(0x004F)  # 相对模式 + 运行

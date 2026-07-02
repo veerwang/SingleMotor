@@ -86,25 +86,41 @@ class TestStateControl:
 
 class TestMotionControl:
     def test_move_relative(self, service, mock_worker):
-        """自包含完整序列: 停机+设模式+写目标+启动+使能+相对运行+触发 = 7 条"""
+        """自包含完整序列: 停机+设模式+方向+写幅值+启动+使能+相对运行+触发 = 8 条"""
         with patch.object(mock_worker, "send_modbus") as mock_send:
             service.move_relative(1000)
-            assert mock_send.call_count == 7
+            assert mock_send.call_count == 8
             # 停机
             assert mock_send.call_args_list[0][0][0].values == [0x0000]
             # 设位置模式
             req1 = mock_send.call_args_list[1][0][0]
             assert req1.address == 0x0039
-            # 写目标位置 (32位)
-            req2 = mock_send.call_args_list[2][0][0]
-            assert req2.function_code == FunctionCode.WRITE_MULTIPLE
-            assert req2.address == 0x0053
+            # 运行方向: 正数 -> 正转(1)
+            req_dir = mock_send.call_args_list[2][0][0]
+            assert req_dir.address == 0x0052
+            assert req_dir.values == [1]
+            # 写步长幅值 (32位, 取绝对值)
+            req3 = mock_send.call_args_list[3][0][0]
+            assert req3.function_code == FunctionCode.WRITE_MULTIPLE
+            assert req3.address == 0x0053
             # 启动+使能
-            assert mock_send.call_args_list[3][0][0].values == [0x0006]
-            assert mock_send.call_args_list[4][0][0].values == [0x0007]
+            assert mock_send.call_args_list[4][0][0].values == [0x0006]
+            assert mock_send.call_args_list[5][0][0].values == [0x0007]
             # 相对模式+触发
-            assert mock_send.call_args_list[5][0][0].values == [0x004F]
-            assert mock_send.call_args_list[6][0][0].values == [0x005F]
+            assert mock_send.call_args_list[6][0][0].values == [0x004F]
+            assert mock_send.call_args_list[7][0][0].values == [0x005F]
+
+    def test_move_relative_negative_direction(self, service, mock_worker):
+        """负数相对运动: 方向应为反转(0)，幅值取绝对值写入 0x0053"""
+        with patch.object(mock_worker, "send_modbus") as mock_send:
+            service.move_relative(-500)
+            req_dir = mock_send.call_args_list[2][0][0]
+            assert req_dir.address == 0x0052
+            assert req_dir.values == [0]
+            # 0x0053 写入的是绝对值 500 (高低字), 不是负数
+            req_mag = mock_send.call_args_list[3][0][0]
+            assert req_mag.address == 0x0053
+            assert req_mag.values == list(ModbusRTU.split_32bit(500))
 
     def test_move_absolute(self, service, mock_worker):
         """自包含完整序列: 停机+设模式+写目标+启动+使能+绝对运行+触发 = 7 条"""
