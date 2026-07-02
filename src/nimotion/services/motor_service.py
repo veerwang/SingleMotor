@@ -65,6 +65,13 @@ class MotorService(QObject):
         self._homing_di_restore: int | None = None
         # 回零是否已真正跑起来(见过 is_running=True)，防止触发后未起转的空闲帧被误判为完成
         self._homing_seen_running = False
+        # 回零 grace 兜底：启动后过了 grace 仍空闲则也判完成，覆盖"已在 home 点、
+        # 再回零几乎不动/移动太短未被采到 is_running"的情况，避免 seen_running 门槛卡死
+        self._homing_grace_over = False
+        self._homing_grace_timer = QTimer()
+        self._homing_grace_timer.setSingleShot(True)
+        self._homing_grace_timer.setInterval(2000)
+        self._homing_grace_timer.timeout.connect(self._on_homing_grace_over)
         # 回零使用的加减速为全局共用寄存器(0x005F/0x0061)，回零前改小、完成后恢复原值
         self._homing_accel_restore: int | None = None
         self._homing_decel_restore: int | None = None
@@ -508,11 +515,18 @@ class MotorService(QObject):
         # 启动回零；完成后通过 status_updated 监测状态字恢复 DI1
         self._homing_di_restore = dev_di_func  # 记录原始 DI 配置
         self._homing_seen_running = False  # 等回零真正跑起来再判定完成
+        self._homing_grace_over = False    # grace 兜底(已在 home 点再回零)
+        self._homing_grace_timer.start()
         self.start_homing()
 
     def _poll_homing_done(self) -> None:
         """轮询回零是否完成，完成后恢复 DI1 为无动作(0)"""
         self.refresh_status()
+
+    def _on_homing_grace_over(self) -> None:
+        """回零 grace 到期：即使未采到 is_running=True 也允许判完成(已在 home 点场景)。"""
+        self._homing_grace_over = True
+        self.refresh_status()  # 立即取一帧推进判定
 
     def _check_homing_running(self, status: MotorStatus) -> None:
         """由 status_updated 信号触发，检测回零完成"""
@@ -520,11 +534,13 @@ class MotorService(QObject):
             return
         # 必须先看到"运行中"，才认可之后的"停止"为回零完成；否则触发回零后电机尚未
         # 起转的空闲帧(is_running=False)会被误判为立即完成(表现为第一次回零秒返回成功、
-        # 实际没动，第二次才真回零)。
+        # 实际没动，第二次才真回零)。grace 兜底覆盖"已在 home 点、再回零几乎不动"的情况：
+        # 过了 grace(2s)仍空闲则也判完成，避免门槛卡死。
         if status.is_running:
             self._homing_seen_running = True
             return
-        if self._homing_seen_running and status.speed == 0:
+        if (self._homing_seen_running or self._homing_grace_over) and status.speed == 0:
+            self._homing_grace_timer.stop()
             self._homing_poll_timer.stop()
             # 先停机，避免写 DI 时 error=6 (slave busy)
             self._write_control_word(0x0000)

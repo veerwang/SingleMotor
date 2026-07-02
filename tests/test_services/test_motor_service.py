@@ -191,6 +191,32 @@ class TestMotionControl:
             assert done == [True]
             assert service._homing_di_restore is None
 
+    def test_homing_grace_completes_when_already_home(self, service, mock_worker):
+        """已在 home 点再回零、几乎不动(never see is_running)时 grace 兜底判完成。"""
+        done = []
+        service.homing_done.connect(lambda: done.append(True))
+        with patch.object(mock_worker, "send_modbus"):
+            service._homing_di_restore = 0x00000001
+            service._homing_seen_running = False
+            service._homing_grace_over = False
+            # 未起转的空闲帧 + grace 未到 -> 不完成
+            s0 = MotorStatus()
+            s0.is_running = False
+            s0.speed = 0
+            service._check_homing_running(s0)
+            assert done == []
+            assert service._homing_di_restore is not None
+            # grace 到期
+            service._on_homing_grace_over()
+            assert service._homing_grace_over is True
+            # 再来空闲帧 -> 兜底判完成(即便从未见过 is_running=True)
+            s1 = MotorStatus()
+            s1.is_running = False
+            s1.speed = 0
+            service._check_homing_running(s1)
+            assert done == [True]
+            assert service._homing_di_restore is None
+
 
 class TestParamOperations:
     def test_read_param(self, service, mock_worker):
