@@ -60,6 +60,9 @@ class MotorService(QObject):
         self._homing_timeout.timeout.connect(self._on_homing_config_timeout)
         # 回零完成后恢复 DI1 的轮询
         self._homing_di_restore: int | None = None
+        # 回零使用的加减速为全局共用寄存器(0x005F/0x0061)，回零前改小、完成后恢复原值
+        self._homing_accel_restore: int | None = None
+        self._homing_decel_restore: int | None = None
         self._homing_poll_timer = QTimer()
         self._homing_poll_timer.setInterval(500)
         self._homing_poll_timer.timeout.connect(self._poll_homing_done)
@@ -188,6 +191,8 @@ class MotorService(QObject):
         self.read_param(0x0069, 2)   # 原点偏移 (2 reg, INT32)
         self.read_param(0x006C, 2)   # 寻找开关速度 (2 reg, UINT32)
         self.read_param(0x006E, 2)   # 寻找零位速度 (2 reg, UINT32)
+        self.read_param(0x005F, 2)   # 加速度 (2 reg, UINT32) - 回零前改小，完成后恢复
+        self.read_param(0x0061, 2)   # 减速度 (2 reg, UINT32) - 回零前改小，完成后恢复
         self.read_param(0x0072, 1)   # 零点回归 (1 reg)
 
     # -- 首次连接参数校准 --
@@ -422,7 +427,7 @@ class MotorService(QObject):
 
     def _check_homing_reads_complete(self) -> None:
         """检查回零配置参数是否全部读取完毕"""
-        needed = {0x002C, 0x0069, 0x006B, 0x006C, 0x006E, 0x0072}
+        needed = {0x002C, 0x0069, 0x006B, 0x005F, 0x0061, 0x006C, 0x006E, 0x0072}
         if not needed.issubset(self._homing_read_values):
             return
         self._homing_timeout.stop()
@@ -442,6 +447,8 @@ class MotorService(QObject):
         dev_offset = self._homing_read_values[0x0069]
         dev_search_speed = self._homing_read_values[0x006C]
         dev_zero_speed = self._homing_read_values[0x006E]
+        dev_accel = self._homing_read_values[0x005F]
+        dev_decel = self._homing_read_values[0x0061]
         dev_zero_ret = self._homing_read_values[0x0072]
 
         diffs: list[str] = []
@@ -462,6 +469,15 @@ class MotorService(QObject):
         if dev_zero_speed != config.zero_speed:
             self._write_32bit(0x006E, config.zero_speed)
             diffs.append(f"寻找零位速度 {dev_zero_speed}->{config.zero_speed}")
+        # 回零加减速改小以提升重复定位精度；记录原值，回零完成后恢复(避免影响转盘定位)
+        if dev_accel != config.accel:
+            self._write_32bit(0x005F, config.accel)
+            diffs.append(f"回零加速度 {dev_accel}->{config.accel}")
+        if dev_decel != config.decel:
+            self._write_32bit(0x0061, config.decel)
+            diffs.append(f"回零减速度 {dev_decel}->{config.decel}")
+        self._homing_accel_restore = dev_accel
+        self._homing_decel_restore = dev_decel
         if dev_zero_ret != config.zero_return:
             self._write_single(0x0072, config.zero_return)
             diffs.append(f"零点回归 {dev_zero_ret}->{config.zero_return}")
@@ -493,7 +509,15 @@ class MotorService(QObject):
             restore = (self._homing_di_restore & ~0x0F) | 0
             self._write_32bit(0x002C, restore)
             self._homing_di_restore = None
-            self.homing_config_status.emit("回零完成，DI1 已恢复为无动作")
+            # 恢复回零前改小的加减速为原值(0x005F/0x0061 全局共用，避免拖慢转盘定位)
+            msg = "回零完成，DI1 已恢复为无动作"
+            if self._homing_accel_restore is not None:
+                self._write_32bit(0x005F, self._homing_accel_restore)
+                self._write_32bit(0x0061, self._homing_decel_restore)
+                msg += f"，加减速已恢复为 {self._homing_accel_restore}"
+                self._homing_accel_restore = None
+                self._homing_decel_restore = None
+            self.homing_config_status.emit(msg)
             self.homing_done.emit()
 
     def _on_homing_config_timeout(self) -> None:

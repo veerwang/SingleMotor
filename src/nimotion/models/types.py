@@ -106,7 +106,12 @@ class HomingConfig:
     method: int = 17  # 0x006B, 回归方式 17=负限位开关回归
     origin_offset: int = 0  # 0x0069, 原点偏移 (pulse, 32-bit signed)
     search_speed: int = 50  # 0x006C, 寻找开关速度 (Step/s, 0~15610)
-    zero_speed: int = 20  # 0x006E, 寻找零位速度 (Step/s, 0~15610)
+    zero_speed: int = 10  # 0x006E, 寻找零位速度 (Step/s)，降为原 20 的 50% 提升重复定位精度
+    # 慢速回零阶段的加减速度：设为慢速速度的 10 倍(=100)。
+    # 回零沿用通用加减速寄存器 0x005F/0x0061（全局共用），
+    # motor_service 会在回零前写入、回零完成后恢复原值，避免影响转盘定位。
+    accel: int = 100  # 0x005F, 回零加速度 (Step/s²)
+    decel: int = 100  # 0x0061, 回零减速度 (Step/s²)
     zero_return: int = 0  # 0x0072, 零点回归 0=禁用 1=启用
 
 

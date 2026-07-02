@@ -130,7 +130,7 @@ class HomingPanel(QWidget):
 
         self._zero_speed_spin = QSpinBox()
         self._zero_speed_spin.setRange(1, 15610)
-        self._zero_speed_spin.setValue(20)
+        self._zero_speed_spin.setValue(10)  # 原 20 降为 50%，提升回零重复定位精度
         self._zero_speed_spin.setSuffix(" Step/s")
         form.addRow("寻找零位速度:", self._zero_speed_spin)
 
@@ -153,11 +153,15 @@ class HomingPanel(QWidget):
         layout.addStretch()
 
     def _on_start(self) -> None:
+        zero_speed = self._zero_speed_spin.value()
         config = HomingConfig(
             method=self._method_spin.value(),
             origin_offset=self._offset_spin.value(),
             search_speed=self._search_speed_spin.value(),
-            zero_speed=self._zero_speed_spin.value(),
+            zero_speed=zero_speed,
+            # 慢速回零阶段加减速 = 慢速速度的 10 倍
+            accel=zero_speed * 10,
+            decel=zero_speed * 10,
             zero_return=self._zero_return_combo.currentData(),
         )
         self._status_label.setText("正在检查参数...")
