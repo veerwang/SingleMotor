@@ -493,8 +493,10 @@ class MotorService(QObject):
             diffs.append(f"零点回归 {dev_zero_ret}->{config.zero_return}")
 
         if diffs:
-            self.save_params()
-            msg = "已更新并保存: " + ", ".join(diffs)
+            # 不写 EEPROM：回零参数每次回零都先读后写重新应用(立即生效)，无需持久化；
+            # 且 DI1/加减速是临时值(回零后在 _check_homing_running 恢复原值)，若存 EEPROM
+            # 会把加减速永久写成回零小值(断电后转盘定位变慢)，并且每次回零都磨损 EEPROM。
+            msg = "已更新: " + ", ".join(diffs)
             self.homing_config_status.emit(msg)
         else:
             self.homing_config_status.emit("参数已一致，无需写入")
