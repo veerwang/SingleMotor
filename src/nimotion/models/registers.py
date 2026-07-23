@@ -60,31 +60,34 @@ HOLDING_REGISTERS: list[RegisterDef] = [
         unit="V", default_val=24, restart_required=True,
         description="电源的电压",
     ),
-    # ── 电流参数（单位: x100mA，如 10=1A, 41=4.1A）──
+    # ── 电流参数（0x15~0x18 单位 x10mA，如 51=0.51A；0x19 单位 x100mA）──
+    # 单位依据 2026-07 硬件实测：出厂值 运行51/加速63/怠机15，按 x100mA 解读为
+    # 5~6A，远超 28 系列额定 1A(早已烧毁)，按 x10mA 解读为 0.5~0.63A 且满足
+    # "过载(0.8A)>加速>运行"规则；28系列上限 95 = 0.95A ≈ 额定 1A 亦吻合。
     RegisterDef(
         0x0015, "减速电流", RegisterType.HOLDING, DataType.UINT16, 1,
-        unit="x100mA", min_val=0, max_val=95, default_val=10,
-        description="实际电流=值x100mA; 28系列最大95(9.5A)",
+        unit="x10mA", min_val=0, max_val=95, default_val=0,
+        description="实际电流=值x10mA; 28系列最大95(0.95A); 本机出厂值0",
     ),
     RegisterDef(
         0x0016, "怠机电流", RegisterType.HOLDING, DataType.UINT16, 1,
-        unit="x100mA", min_val=0, max_val=95, default_val=5,
-        description="实际电流=值x100mA; 电机空闲时的保持电流",
+        unit="x10mA", min_val=0, max_val=95, default_val=15,
+        description="实际电流=值x10mA; 电机空闲时的保持电流; 越大发热越大; 本机出厂值15(0.15A)",
     ),
     RegisterDef(
         0x0017, "加速电流", RegisterType.HOLDING, DataType.UINT16, 1,
-        unit="x100mA", min_val=0, max_val=95, default_val=10,
-        description="实际电流=值x100mA; 加速阶段的最大电流",
+        unit="x10mA", min_val=0, max_val=95, default_val=63,
+        description="实际电流=值x10mA; 加速/堵转阶段的最大电流; 本机出厂值63(0.63A)",
     ),
     RegisterDef(
         0x0018, "运行电流", RegisterType.HOLDING, DataType.UINT16, 1,
-        unit="x100mA", min_val=0, max_val=95, default_val=10,
-        description="实际电流=值x100mA; 正常运行时的最大电流",
+        unit="x10mA", min_val=0, max_val=95, default_val=51,
+        description="实际电流=值x10mA; 正常运行时的最大电流; 本机出厂值51(0.51A)",
     ),
     RegisterDef(
         0x0019, "过载电流", RegisterType.HOLDING, DataType.UINT16, 1,
-        unit="x100mA", min_val=0, max_val=95, default_val=40,
-        description="实际电流=值x100mA; 触发过流报警的阈值",
+        unit="x100mA", min_val=0, max_val=95, default_val=8,
+        description="实际电流=值x100mA(注意与0x15~0x18单位不同,手册明确); 触发过流报警阈值; 应>加速>运行; 本机出厂值8(0.8A)",
     ),
     # ── 运动参数 ──
     RegisterDef(
