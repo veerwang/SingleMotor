@@ -47,6 +47,12 @@ class MotorService(QObject):
         (0x005B, 600, "最大速度", True),    # 600 Step/s (×16=9600 pulses/s ≈ 393°/s转盘)
     ]
 
+    # 开机校准但不存 EEPROM 的运行时参数：这些值会随运行动态改写
+    # (如相对运动按目标符号写 0x0052)，若存 EEPROM 会导致每次开机都触发保存
+    RUNTIME_PARAMS: list[tuple[int, int, str, bool]] = [
+        (0x0052, 1, "运动方向(正转)", False),  # 0=反转 1=正转，立即生效
+    ]
+
     def __init__(self, worker: CommWorker, slave_id: int = 1) -> None:
         super().__init__()
         self._worker = worker
@@ -223,12 +229,12 @@ class MotorService(QObject):
         self._init_phase = "reading"
         self._init_read_values.clear()
         self._init_timeout.start(3000)
-        for addr, _val, _name, is_32bit in self.INIT_PARAMS:
+        for addr, _val, _name, is_32bit in self.INIT_PARAMS + self.RUNTIME_PARAMS:
             self.read_param(addr, 2 if is_32bit else 1)
 
     def _check_init_reads_complete(self) -> None:
         """检查初始化参数是否全部读取完毕"""
-        needed = {addr for addr, _, _, _ in self.INIT_PARAMS}
+        needed = {addr for addr, _, _, _ in self.INIT_PARAMS + self.RUNTIME_PARAMS}
         if not needed.issubset(self._init_read_values):
             return
         self._init_timeout.stop()
@@ -244,11 +250,24 @@ class MotorService(QObject):
                     self._write_single(addr, expected)
                 diffs.append(f"{name} {current}->{expected}")
 
+        # 运行时参数：不一致仅写入，不触发 EEPROM 保存
+        runtime_diffs: list[str] = []
+        for addr, expected, name, is_32bit in self.RUNTIME_PARAMS:
+            current = self._init_read_values[addr]
+            if current != expected:
+                if is_32bit:
+                    self._write_32bit(addr, expected)
+                else:
+                    self._write_single(addr, expected)
+                runtime_diffs.append(f"{name} {current}->{expected}")
+
         if diffs:
             self.save_params()
             msg = "参数已校准并保存: " + ", ".join(diffs)
         else:
             msg = "参数检查通过，无需校准"
+        if runtime_diffs:
+            msg += "; 已设置: " + ", ".join(runtime_diffs)
         self._init_phase = "idle"
         self.init_config_done.emit(msg)
 
