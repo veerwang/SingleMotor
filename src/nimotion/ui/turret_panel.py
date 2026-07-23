@@ -289,8 +289,8 @@ class TurretPanel(QWidget):
         self._status_label.setText("软件搜索感应点中...")
         self._status_label.setStyleSheet("color: #FFA726;")
         self._update_controls()
-        # 整定时长按 最大速度×细分 估算脉冲/秒(最大速度默认 60 Step/s)
-        pps = 60 * self._microstep
+        # 搜索期间 HomeSearch 会临时把最大速度降为 SEARCH_SPEED，按其估算整定时长
+        pps = HomeSearch.SEARCH_SPEED * self._microstep
         self._search.start(pulses_per_sec=pps, return_to_start=True)
 
     def _on_search_finished(self, distance: int) -> None:

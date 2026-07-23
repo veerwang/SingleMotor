@@ -14,6 +14,7 @@ class FakeMotor(QObject):
     """
 
     status_updated = pyqtSignal(object)
+    param_read = pyqtSignal(int, int)
 
     def __init__(self, sensor_pos: int) -> None:
         super().__init__()
@@ -23,6 +24,9 @@ class FakeMotor(QObject):
         self.neg_limit = False
         self.jogs: list[int] = []
         self.disabled = 0
+        self.max_speed = 600
+        self.speed_writes: list[int] = []
+        self.respond_to_read = True
 
     def disable(self) -> None:
         self.disabled += 1
@@ -31,9 +35,16 @@ class FakeMotor(QObject):
         self.pos = 0
         self._update_di()
 
+    def read_param(self, addr: int, count: int = 1) -> None:
+        if addr == 0x005B and self.respond_to_read:
+            self.param_read.emit(addr, self.max_speed)
+
     def write_param_32bit(self, addr: int, value: int, signed: bool = False) -> None:
         if addr == 0x002C:
             self.neg_limit = value == 0x00000001
+        elif addr == 0x005B:
+            self.max_speed = value
+            self.speed_writes.append(value)
 
     def move_relative(self, step: int) -> None:
         self.jogs.append(step)
@@ -106,6 +117,35 @@ def test_zeroing_before_measure(app):
     hs.start(pulses_per_sec=960, return_to_start=False)
     _drive(hs, results)
     assert results == [500]        # 清零后测得 500，而非受 7935 影响
+
+
+def test_speed_lowered_during_search_and_restored(app):
+    """搜索前临时把最大速度降为 SEARCH_SPEED，结束后恢复原值。"""
+    fake = FakeMotor(sensor_pos=-500)
+    hs = HomeSearch(fake)
+    results = []
+    hs.finished.connect(lambda d: results.append(d))
+    hs.start(pulses_per_sec=960, return_to_start=False)
+    _drive(hs, results)
+    assert results == [500]
+    assert fake.speed_writes[0] == HomeSearch.SEARCH_SPEED  # 搜索前降速
+    assert fake.speed_writes[-1] == 600                     # 结束后恢复
+    assert fake.max_speed == 600
+
+
+def test_fail_when_speed_read_times_out(app):
+    """读不到最大速度时失败并还原配置，不带病搜索。"""
+    fake = FakeMotor(sensor_pos=-500)
+    fake.respond_to_read = False
+    hs = HomeSearch(fake)
+    results = []
+    hs.finished.connect(lambda d: results.append(("ok", d)))
+    hs.failed.connect(lambda r: results.append(("fail", r)))
+    hs.start(pulses_per_sec=960)
+    hs._on_settle_done()  # 模拟读取超时到期
+    assert results == [("fail", "读取最大速度超时")]
+    assert fake.neg_limit is False
+    assert hs.running is False
 
 
 def test_fail_when_sensor_unreachable(app):

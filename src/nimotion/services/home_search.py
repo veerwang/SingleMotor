@@ -11,6 +11,10 @@ homing 感应点(默认 DI1)，测量"当前位置 → 感应点"的脉冲距离
 触发 → 下一步。**整定时长按步长/速度动态估算并留裕量**，避免固定超时打断长行程
 (尤其返回移动)；另设总看门狗兜底。搜索期间临时把 DI1 配为负限位作硬件安全网
 (撞到自动停)，结束后还原。
+
+搜索期间临时把最大速度(0x005B)降为 SEARCH_SPEED(先读原值，结束/失败恢复)：
+高速下撞感应点后限位停车距离变长，若感应窗口窄会穿过窗口停在另一侧，静止采样
+DI 已释放，程序误判"未到"继续走，表现为越过感应点。
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ from .motor_service import MotorService
 _DI_FUNC_ADDR = 0x002C          # DI 功能配置
 _DI_NEG_LIMIT = 0x00000001      # DI1=负限位(搜索安全网)
 _DI_NONE = 0x00000000           # DI1=无
+_MAX_SPEED_ADDR = 0x005B        # 最大速度(UINT32, Step/s)
 
 
 class HomeSearch(QObject):
@@ -38,17 +43,20 @@ class HomeSearch(QObject):
     MAX_TRAVEL = 10000           # 搜索行程上限(>转盘一圈 8800)
     SETTLE_MARGIN_MS = 300       # 单步整定裕量
     OVERALL_TIMEOUT_MS = 120000  # 总看门狗
+    SEARCH_SPEED = 60            # 搜索期间临时最大速度(Step/s)，此工况下已验证不越过
+    PREPARE_TIMEOUT_MS = 3000    # 读取原最大速度超时
 
     def __init__(self, motor: MotorService, di_bit: int = 0, parent=None) -> None:
         super().__init__(parent)
         self._motor = motor
         self._di_bit = di_bit
-        self._phase = "idle"     # idle/coarse/backoff/fine/returning
+        self._phase = "idle"     # idle/prepare/coarse/backoff/fine/returning
         self._settling = False
         self._awaiting = False   # 本整定周期是否还需处理一次状态(防重复处理)
         self._measured = 0
         self._return_to_start = True
         self._pps = 480
+        self._orig_speed: int | None = None  # 搜索前的最大速度，结束后恢复
 
         self._settle_timer = QTimer(self)
         self._settle_timer.setSingleShot(True)
@@ -57,6 +65,7 @@ class HomeSearch(QObject):
         self._watchdog.setSingleShot(True)
         self._watchdog.timeout.connect(lambda: self._fail("搜索超时"))
         self._motor.status_updated.connect(self._on_status)
+        self._motor.param_read.connect(self._on_param_read)
 
     @property
     def running(self) -> bool:
@@ -77,19 +86,33 @@ class HomeSearch(QObject):
         self._pps = max(int(pulses_per_sec), 1)
         self._return_to_start = return_to_start
         self._measured = 0
+        self._orig_speed = None
         # 先停机确保可写 DI；DI1=负限位作硬件安全网(撞到自动停)
         self._motor.disable()
         self._motor.write_param_32bit(_DI_FUNC_ADDR, _DI_NEG_LIMIT)
         # 当前位置计数清 0
         self._motor.set_zero()
-        # 进入粗搜，等首帧状态
-        self._phase = "coarse"
+        # 读当前最大速度(结束后恢复)，读到后临时降速再进入粗搜
+        self._phase = "prepare"
         self._settling = False
-        self._awaiting = True
+        self._awaiting = False
         self._watchdog.start(self.OVERALL_TIMEOUT_MS)
-        self._motor.refresh_status()
+        self._settle_timer.start(self.PREPARE_TIMEOUT_MS)  # 读取超时兜底
+        self._motor.read_param(_MAX_SPEED_ADDR, 2)
 
     # -- 内部 --
+
+    def _on_param_read(self, addr: int, value: int) -> None:
+        if self._phase != "prepare" or addr != _MAX_SPEED_ADDR:
+            return
+        self._settle_timer.stop()
+        self._orig_speed = value
+        if value != self.SEARCH_SPEED:
+            self._motor.write_param_32bit(_MAX_SPEED_ADDR, self.SEARCH_SPEED)
+        # 进入粗搜，等首帧状态
+        self._phase = "coarse"
+        self._awaiting = True
+        self._motor.refresh_status()
 
     def _settle_for(self, step: int) -> int:
         """按步长/速度动态估算整定时长(ms)，×1.3 裕量 + 固定裕量。"""
@@ -102,6 +125,9 @@ class HomeSearch(QObject):
         self._settle_timer.start(self._settle_for(step))
 
     def _on_settle_done(self) -> None:
+        if self._phase == "prepare":
+            self._fail("读取最大速度超时")
+            return
         self._settling = False
         self._awaiting = True
         self._motor.refresh_status()  # 主动取一帧最新状态来推进
@@ -154,6 +180,9 @@ class HomeSearch(QObject):
         self._settle_timer.stop()
         self._watchdog.stop()
         self._motor.disable()                                   # 脱机
+        if self._orig_speed is not None and self._orig_speed != self.SEARCH_SPEED:
+            self._motor.write_param_32bit(_MAX_SPEED_ADDR, self._orig_speed)
+        self._orig_speed = None
         self._motor.write_param_32bit(_DI_FUNC_ADDR, _DI_NONE)  # 还原 DI1=无
         self._phase = "idle"
         self._settling = False
