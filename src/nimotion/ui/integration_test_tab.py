@@ -60,7 +60,7 @@ class IntegrationTestTab(QWidget):
     """
 
     _POLL_INTERVAL_MS = 500  # 状态轮询周期
-    _MOVE_TIMEOUT_MS = 30000  # 单次移动超时
+    _MOVE_TIMEOUT_MS = 5000  # 单次移动超时；90°切孔正常约1s
     _HOME_TIMEOUT_MS = 60000  # 单次回零超时
     _PAUSE_DEFAULT_S = 1.0  # 每步完成后的间歇默认值：怠机电流(0.15A)介入散热，降低占空比
 
@@ -228,12 +228,16 @@ class IntegrationTestTab(QWidget):
         self._motor.stop()
         self._finish("已停止")
 
-    def _finish(self, message: str, error: bool = False) -> None:
+    def _finish(self, message: str, error: bool = False, disable: bool = True) -> None:
+        """结束测试并复位 UI。disable=True 时去使能电机(电流归零)；
+        设备已断开时传 False(端口失效，不再发指令)。"""
         self._running = False
         self._phase = "idle"
         self._poll_timer.stop()
         self._step_timer.stop()
         self._pause_timer.stop()
+        if disable:
+            self._motor.disable()
         self._start_btn.setEnabled(True)
         self._count_edit.setEnabled(True)
         self._stop_btn.setEnabled(False)
@@ -307,11 +311,14 @@ class IntegrationTestTab(QWidget):
         if not self._running:
             return
         self._motor.stop()
+        if self._phase == "homing":
+            # 回零超时兜底清理(恢复回零前临时改小的加减速)
+            self._motor.abort_homing_cleanup()
         self._finish("步骤超时，测试中止", error=True)
 
     def _on_disconnected(self) -> None:
         if self._running:
-            self._finish("设备已断开，测试中止", error=True)
+            self._finish("设备已断开，测试中止", error=True, disable=False)
 
     # -- 辅助 --
 

@@ -19,6 +19,7 @@ from ..models.turret import (
     MICROSTEP_REG_ADDR,
     TurretPosition,
     backlash_deg_to_pulses,
+    calculate_pulses_per_position,
     effective_position_pulses,
     load_backlash_deg,
     load_calibration,
@@ -59,7 +60,7 @@ class TurretPanel(QWidget):
     }
 
     _PARAM_READ_TIMEOUT_MS = 3000  # 参数读取超时（毫秒）
-    _MOVING_TIMEOUT_MS = 30000  # 普通移动(点动/切换)超时（毫秒）
+    _MOVING_TIMEOUT_MS = 5000  # 普通移动(点动/切换)超时（毫秒）；90°切孔正常约1s
     _HOME_TIMEOUT_MS = 60000  # 回零超时（回零较慢，尤其降速后，独立于普通移动超时）
     _SETTLE_MS = 800  # 移动启动缓冲：此期间不接受"停止"判定，避免启动前在途的过期状态帧误判完成
     _DEFAULT_JOG_STEP = 50  # 默认点动步进（脉冲）
@@ -141,11 +142,17 @@ class TurretPanel(QWidget):
 
         # 归零按钮组
         home_group = QGroupBox("归零")
-        home_layout = QVBoxLayout()
+        home_layout = QHBoxLayout()
         self._home_btn = QPushButton("原点回归")
         self._home_btn.setEnabled(False)  # 读取细分参数前禁用
         self._home_btn.clicked.connect(self._on_home)
         home_layout.addWidget(self._home_btn)
+        self._release_btn = QPushButton("去使能")
+        self._release_btn.setToolTip(
+            "停机并去使能，电流归零、可手动转动转盘（回零后电机默认保持夹持）"
+        )
+        self._release_btn.clicked.connect(self._on_release)
+        home_layout.addWidget(self._release_btn)
         home_group.setLayout(home_layout)
         right.addWidget(home_group)
 
@@ -243,6 +250,18 @@ class TurretPanel(QWidget):
 
             switch_layout.addLayout(row)
 
+        # 同步：以位置1为基准，位置2/3/4 依次 +每孔脉冲(理论等分)
+        sync_row = QHBoxLayout()
+        self._sync_btn = QPushButton("同步")
+        self._sync_btn.setToolTip(
+            "以位置1标定值为基准，位置2/3/4 = 位置1 + n×每孔脉冲（如 1820 → 4020/6220/8420）"
+        )
+        self._sync_btn.setEnabled(False)  # 读取细分参数前禁用
+        self._sync_btn.clicked.connect(self._on_sync)
+        sync_row.addWidget(self._sync_btn)
+        sync_row.addStretch()
+        switch_layout.addLayout(sync_row)
+
         switch_group.setLayout(switch_layout)
         right.addWidget(switch_group)
 
@@ -252,13 +271,30 @@ class TurretPanel(QWidget):
     # -- 操作回调 --
 
     def _on_home(self) -> None:
-        """执行归零流程（含 DI1 临时切换）。"""
+        """执行归零流程（方式21，负向原点开关回归）。"""
         self._homing = True
         self._set_moving(True)
         self._status_label.setText("正在归零...")
         self._status_label.setStyleSheet("color: #FFA726;")
         self._motor.configure_and_start_homing(HomingConfig())
         self._moving_timer.start(self._HOME_TIMEOUT_MS)
+
+    def _on_release(self) -> None:
+        """停机并去使能：电流归零，可手动转动转盘。
+
+        注意：开环电机，手动转动不会被计数器跟踪，之后必须重新回零
+        才能做位置移动。
+        """
+        if self._searching:
+            return  # 测距进行中有自己的中止/恢复路径，不在此打断
+        self._homing = False
+        self._pending_final = None
+        self._moving_timer.stop()
+        self._motor.stop()
+        self._motor.disable()
+        self._set_moving(False)
+        self._status_label.setText("已去使能，可手动转动转盘（再用前请先回零）")
+        self._status_label.setStyleSheet("color: #888;")
 
     def _on_jog(self, direction: int) -> None:
         """点动：相对移动一个步进，用于对位标定。"""
@@ -277,6 +313,25 @@ class TurretPanel(QWidget):
         self._pos_spins[pos].setValue(self._last_position)  # 触发保存
         self._status_label.setText(
             f"已标定{self._POS_LABELS[pos]} = {self._last_position} pulse"
+        )
+        self._status_label.setStyleSheet("color: #66BB6A;")
+
+    def _on_sync(self) -> None:
+        """同步：以位置1标定值为基准，位置2/3/4 = 位置1 + n×每孔脉冲。"""
+        if self._microstep is None:
+            return
+        base = self._pos_spins[TurretPosition.POS_1].value()
+        per_hole = calculate_pulses_per_position(self._microstep)
+        targets = {
+            TurretPosition.POS_2: base + per_hole,
+            TurretPosition.POS_3: base + 2 * per_hole,
+            TurretPosition.POS_4: base + 3 * per_hole,
+        }
+        for pos, val in targets.items():
+            self._pos_spins[pos].setValue(val)  # 触发保存
+        self._status_label.setText(
+            f"已同步: 位置1={base}, 2={targets[TurretPosition.POS_2]}, "
+            f"3={targets[TurretPosition.POS_3]}, 4={targets[TurretPosition.POS_4]} pulse"
         )
         self._status_label.setStyleSheet("color: #66BB6A;")
 
@@ -443,13 +498,22 @@ class TurretPanel(QWidget):
         self._status_label.setStyleSheet("color: #F44336;")
 
     def _on_moving_timeout(self) -> None:
-        """运动超时处理。"""
+        """运动超时处理：停机并去使能，电流归零。
+
+        回零超时时额外做兜底清理(恢复回零前临时改小的加减速)。
+        """
         if not self._is_moving:
             return
+        was_homing = self._homing
         self._homing = False
         self._pending_final = None
+        self._motor.stop()
+        if was_homing:
+            self._motor.abort_homing_cleanup()  # 含停机脱机
+        else:
+            self._motor.disable()
         self._set_moving(False)
-        self._status_label.setText("运动超时")
+        self._status_label.setText("运动超时，已去使能")
         self._status_label.setStyleSheet("color: #F44336;")
 
     def _begin_settle(self) -> None:
@@ -499,6 +563,7 @@ class TurretPanel(QWidget):
         )
         self._home_btn.setEnabled(idle)
         self._search_btn.setEnabled(idle)  # 软件测距无需先回零，参数就绪即可
+        self._sync_btn.setEnabled(idle)    # 同步只改标定值，无需先回零
         # 点动/切换/标定需已归零
         self._jog_neg_btn.setEnabled(idle and self._homed)
         self._jog_pos_btn.setEnabled(idle and self._homed)
