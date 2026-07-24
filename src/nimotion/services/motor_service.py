@@ -39,27 +39,28 @@ class MotorService(QObject):
     # 寄存器单位 Step/s (全步/秒), 实际 pulses/s = Step/s × 细分数
     INIT_PARAMS: list[tuple[int, int, str, bool]] = [
         (0x001A, 4, "细分", False),          # 寄存器值4 = 细分16 (需重启生效)
-        # 速度/加速度按"装2物镜"带载工况保守取值：600/2000 空载可行，但带载
-        # 偏心+惯量增大后高速区力矩不足会丢步(开环无反馈，只能留裕量)
-        (0x005F, 1000, "加速度", True),     # 1000 Step/s² (硬件上限约2000)
-        (0x0061, 1000, "减速度", True),     # 1000 Step/s²
+        # 速度/加速度: 2026-07-24 验收定稿(运行电流已提至0.95A补足带载力矩)
+        (0x005F, 2000, "加速度", True),     # 2000 Step/s² (硬件上限约2000, ≥3000报error3)
+        (0x0061, 2000, "减速度", True),     # 2000 Step/s²
         # 最小速度(起停速度)必须 ≤ 最大速度，否则写最大速度会被拒(非法数据值)。
         # 必须排在最大速度之前先写小，再写最大速度 才能通过。
         (0x005D, 16, "最小速度", True),     # 16 Step/s (手册默认，起停速度)
-        (0x005B, 300, "最大速度", True),    # 300 Step/s (×16=4800 pulses/s ≈ 196°/s转盘)
+        (0x005B, 360, "最大速度", True),    # 360 Step/s (×16=5760 pulses/s ≈ 236°/s转盘)
+        # 电流参数: 2026-07-24 验收定稿，该型号产品统一出厂配置，固化 EEPROM。
+        # 依据: 带2物镜丢步(出厂0.51A/0.7A均丢步，0.85A起不丢)；电机额定1.2A
+        # 但驱动器(SDM4203-485-A-I)固件上限95=0.95A(写96即拒绝err=3)，取上限。
+        # 单位 x10mA(0x16/0x17/0x18)、x100mA(0x19)；实测85=850mA确认单位。
+        # 注意 0x16/0x19 需停机才可写(否则err=6)，连接初始化时为脱机态满足。
+        (0x0019, 13, "过载电流(1.3A)", False),
+        (0x0016, 60, "怠机电流(0.6A)", False),
+        (0x0017, 95, "加速电流(0.95A)", False),
+        (0x0018, 95, "运行电流(0.95A)", False),
     ]
 
-    # 开机校准但不存 EEPROM 的运行时参数：每次连接写入 RAM，断电还原出厂值。
-    # 0x0052 会随运行动态改写(相对运动按目标符号写)，本就不可保存；
-    # 电流参数按用户要求不固化，仅下载到 RAM。
-    # 电流值依据: 带2物镜丢步，出厂运行电流仅0.51A(额定1A的一半)，上调至
-    # 接近额定补力矩。单位 x10mA(0x17/0x18)、x100mA(0x19)；写序保证
-    # 过载(1.0A) > 加速(0.95A) > 运行(0.85A)。
+    # 开机校准但不存 EEPROM 的运行时参数：每次连接写入 RAM。
+    # 0x0052 会随运行动态改写(相对运动按目标符号写)，且手册规定不可保存。
     RUNTIME_PARAMS: list[tuple[int, int, str, bool]] = [
         (0x0052, 1, "运动方向(正转)", False),  # 0=反转 1=正转，立即生效
-        (0x0019, 10, "过载电流(1.0A)", False),
-        (0x0017, 95, "加速电流(0.95A)", False),
-        (0x0018, 85, "运行电流(0.85A)", False),
     ]
 
     def __init__(self, worker: CommWorker, slave_id: int = 1) -> None:
@@ -259,7 +260,12 @@ class MotorService(QObject):
                     self._write_single(addr, expected)
                 diffs.append(f"{name} {current}->{expected}")
 
-        # 运行时参数：不一致仅写入，不触发 EEPROM 保存
+        # EEPROM 保存必须先于运行时参数写入：保存指令持久化的是设备当前
+        # RAM 快照，若先写运行时参数(电流等)再保存，会把它们连带固化
+        if diffs:
+            self.save_params()
+
+        # 运行时参数：不一致仅写入 RAM，不固化
         runtime_diffs: list[str] = []
         for addr, expected, name, is_32bit in self.RUNTIME_PARAMS:
             current = self._init_read_values[addr]
@@ -271,7 +277,6 @@ class MotorService(QObject):
                 runtime_diffs.append(f"{name} {current}->{expected}")
 
         if diffs:
-            self.save_params()
             msg = "参数已校准并保存: " + ", ".join(diffs)
         else:
             msg = "参数检查通过，无需校准"

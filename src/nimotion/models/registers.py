@@ -62,27 +62,29 @@ HOLDING_REGISTERS: list[RegisterDef] = [
     ),
     # ── 电流参数（0x15~0x18 单位 x10mA，如 51=0.51A；0x19 单位 x100mA）──
     # 单位依据 2026-07 硬件实测：出厂值 运行51/加速63/怠机15，按 x100mA 解读为
-    # 5~6A，远超 28 系列额定 1A(早已烧毁)，按 x10mA 解读为 0.5~0.63A 且满足
-    # "过载(0.8A)>加速>运行"规则；28系列上限 95 = 0.95A ≈ 额定 1A 亦吻合。
+    # 5~6A(电机早已烧毁)，按 x10mA 解读为 0.5~0.63A 且满足"过载>加速>运行"规则。
+    # 上限 95 为驱动器固件硬限制(2026-07-24 实测: 写96即拒绝 err=3)——电机绕组
+    # 额定 1.2A(用户 datasheet)，但一体化驱动级最大只能输出 0.95A。
+    # 注: 0x16/0x19 写入需先停机(否则 err=6 slave busy)，0x17/0x18 可随时写。
     RegisterDef(
         0x0015, "减速电流", RegisterType.HOLDING, DataType.UINT16, 1,
         unit="x10mA", min_val=0, max_val=95, default_val=0,
-        description="实际电流=值x10mA; 28系列最大95(0.95A); 本机出厂值0",
+        description="实际电流=值x10mA; 驱动器上限95(0.95A, 固件实测); 本机出厂值0",
     ),
     RegisterDef(
         0x0016, "怠机电流", RegisterType.HOLDING, DataType.UINT16, 1,
         unit="x10mA", min_val=0, max_val=95, default_val=15,
-        description="实际电流=值x10mA; 电机空闲时的保持电流; 越大发热越大; 本机出厂值15(0.15A)",
+        description="实际电流=值x10mA; 电机空闲时的保持电流; 越大发热越大; 写入需先停机; 本机出厂值15(0.15A)",
     ),
     RegisterDef(
         0x0017, "加速电流", RegisterType.HOLDING, DataType.UINT16, 1,
         unit="x10mA", min_val=0, max_val=95, default_val=63,
-        description="实际电流=值x10mA; 加速/堵转阶段的最大电流; 本机出厂值63(0.63A)",
+        description="实际电流=值x10mA; 加速/堵转阶段的最大电流; 驱动器上限95(0.95A); 本机出厂值63(0.63A)",
     ),
     RegisterDef(
         0x0018, "运行电流", RegisterType.HOLDING, DataType.UINT16, 1,
         unit="x10mA", min_val=0, max_val=95, default_val=51,
-        description="实际电流=值x10mA; 正常运行时的最大电流; 本机出厂值51(0.51A)",
+        description="实际电流=值x10mA; 正常运行时的最大电流; 驱动器上限95(0.95A), 电机额定1.2A给不满; 本机出厂值51(0.51A)",
     ),
     RegisterDef(
         0x0019, "过载电流", RegisterType.HOLDING, DataType.UINT16, 1,
