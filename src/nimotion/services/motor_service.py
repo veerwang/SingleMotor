@@ -148,6 +148,17 @@ class MotorService(QObject):
         """运行 -> 使能（减速停机）"""
         self._write_control_word(0x0007)
 
+    def hold_position_clamp(self) -> None:
+        """位置模式下重新上电到 Operation Enabled(0x000F)，施加保持力矩夹持。
+
+        实测本驱动器仅 0x000F 才施加保持电流；0x000F 不含新位置触发位，
+        位置模式下不会产生运动。用于回零完成后停在 home 点夹持。
+        """
+        self._write_single(0x0039, int(RunMode.POSITION))
+        self._write_control_word(0x0006)
+        self._write_control_word(0x0007)
+        self._write_control_word(0x000F)
+
     def quick_stop(self) -> None:
         """紧急停机"""
         self._write_control_word(0x0002)
@@ -590,15 +601,8 @@ class MotorService(QObject):
                 msg += f"，加减速已恢复为 {self._homing_accel_restore}"
                 self._homing_accel_restore = None
                 self._homing_decel_restore = None
-            # 回零后保持使能并夹持力矩：上面为改 DI 写了 0x0000(脱机)。实测该驱动器
-            # 仅 Operation Enabled(0x000F/0x0037) 才施加保持电流夹住电机，Switched On
-            # (0x0007) 不夹持。这里从脱机态重新上电到 0x000F 保持力矩、停在 home。
-            # 先切位置模式，避免在回零模式下 operation-enabled 的语义歧义；0x000F 不含
-            # 新位置触发位，位置模式下不会产生运动，也不会重新回零。
-            self._write_single(0x0039, int(RunMode.POSITION))  # 位置模式
-            self._write_control_word(0x0006)  # 就绪
-            self._write_control_word(0x0007)  # 使能
-            self._write_control_word(0x000F)  # 运行使能(保持力矩夹持)
+            # 回零后保持使能并夹持力矩(上面为写参数发了 0x0000 脱机)
+            self.hold_position_clamp()
             msg += "，电机保持使能夹持"
             self.homing_config_status.emit(msg)
             self.homing_done.emit()

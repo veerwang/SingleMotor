@@ -1,10 +1,15 @@
-"""软件测距控制器：测量"当前位置 → homing 感应点"的脉冲距离。
+"""软件测距/软件回零控制器(共用同一状态机与参数，经理要求协议一致)。
 
-流程(混合式，2026-07-24 方案B)：每次测量前把当前位置计数**清 0**(设置零点
-0x0047) → **sweep**: 速度模式低速负向连续运动，上位机周期轮询 DI 电平，
-见触发立即减速停机(停在窗口内或刚越过) → **backoff**: 回退释放开关 →
-**fine**: 细步逼近取精确触发点(窗口正侧边沿，与 home 同一边沿) →
-(可选)返回起点。清 0 后触发点为负值，距离取其绝对值。
+**测距模式**：每次测量前把当前位置计数**清 0**(设置零点 0x0047) →
+**sweep**: 速度模式低速负向连续运动，上位机周期轮询 DI 电平，见触发立即
+减速停机(停在窗口内或刚越过) → **backoff**: 回退释放开关 → **fine**:
+细步逼近取精确触发点(窗口正侧边沿) → (可选)返回起点。清 0 后触发点为
+负值，距离取其绝对值。
+
+**回零模式**(start_homing)：与测距前 3 步完全相同(sweep → backoff →
+fine，同参数)，fine 找到边沿后**就地设零**建立 home 基准，随后保持使能
+夹持(hold_position_clamp)停在 home 点。不使用驱动器内置回零，回零与测距
+的边沿检测工况因此完全一致。注: home 重复精度 = 细搜步长量化(±FINE_STEP)。
 
 防走样约束: 感应窗口实测仅约 50 脉冲宽(home 边沿起 -10~-55, ≈2°转盘)。
 sweep 速度必须满足 窗口穿越时间 ≥ 2×轮询周期，否则两次轮询之间会整个跨过
@@ -34,8 +39,9 @@ class HomeSearch(QObject):
     """软件搜索感应点并测量当前位置→感应点距离。"""
 
     progress = pyqtSignal(int)   # 搜索中当前位置(脉冲)
-    finished = pyqtSignal(int)   # 测得距离(脉冲, 正值)
-    failed = pyqtSignal(str)     # 失败原因
+    finished = pyqtSignal(int)   # 测距完成: 测得距离(脉冲, 正值)
+    homed = pyqtSignal()         # 软件回零完成: 已在边沿设零并夹持
+    failed = pyqtSignal(str)     # 失败原因(两种模式共用)
 
     SWEEP_SPEED = 25             # sweep 连续扫描速度(Step/s)，见模块注释防走样约束
     POLL_MS = 50                 # sweep 期间状态轮询周期
@@ -61,6 +67,7 @@ class HomeSearch(QObject):
         self._fine_travel = 0
         self._measured = 0
         self._return_to_start = True
+        self._mode = "measure"   # measure=测距 / home=软件回零
         self._pps = 480
         self._orig_speed: int | None = None  # 搜索前的最大速度，结束后恢复
 
@@ -90,8 +97,19 @@ class HomeSearch(QObject):
 
         pulses_per_sec 用于按步长动态估算点动整定时长(建议传 最大速度×细分数)。
         """
+        self._begin(pulses_per_sec, return_to_start, "measure")
+
+    def start_homing(self, pulses_per_sec: int = 480) -> None:
+        """软件回零：sweep → 回退 → 细搜到边沿 → 就地设零 → 夹持。
+
+        与测距前 3 步协议/参数完全一致(经理要求)，完成发 homed 信号。
+        """
+        self._begin(pulses_per_sec, False, "home")
+
+    def _begin(self, pulses_per_sec: int, return_to_start: bool, mode: str) -> None:
         if self._phase != "idle":
             return
+        self._mode = mode
         self._pps = max(int(pulses_per_sec), 1)
         self._return_to_start = return_to_start
         self._measured = 0
@@ -196,6 +214,11 @@ class HomeSearch(QObject):
                 self._jog(-self.FINE_STEP)
         elif self._phase == "fine":
             if triggered:
+                if self._mode == "home":
+                    # 就地设零建立 home 基准，保持使能夹持停在 home 点
+                    self._motor.set_zero()
+                    self._finish_home()
+                    return
                 self._measured = -pos       # 清 0 后触发点为负，距离取正
                 if self._return_to_start:
                     self._phase = "returning"
@@ -215,6 +238,12 @@ class HomeSearch(QObject):
         self._teardown()
         self.finished.emit(self._measured)
 
+    def _finish_home(self) -> None:
+        """回零成功收尾：还原速度参数后保持使能夹持(不脱机)。"""
+        self._teardown()
+        self._motor.hold_position_clamp()
+        self.homed.emit()
+
     def _fail(self, reason: str) -> None:
         self._teardown()
         self.failed.emit(reason)
@@ -223,7 +252,7 @@ class HomeSearch(QObject):
         self._settle_timer.stop()
         self._poll_timer.stop()
         self._watchdog.stop()
-        self._motor.disable()                                   # 脱机
+        self._motor.disable()                                   # 脱机(写参数需停机)
         if self._orig_speed is not None and self._orig_speed != self.SEARCH_SPEED:
             self._motor.write_param_32bit(_MAX_SPEED_ADDR, self._orig_speed)
         self._orig_speed = None

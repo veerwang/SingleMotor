@@ -31,6 +31,8 @@ class FakeMotor(QObject):
         self.sensor_pos = sensor_pos
         self.window = window
         self.alarm_code = 0
+        self.clamped = False
+        self.zero_calls = 0
         self.di_config_writes: list[int] = []
         self.jogs: list[int] = []
         self.disabled = 0
@@ -44,12 +46,17 @@ class FakeMotor(QObject):
     def disable(self) -> None:
         self.disabled += 1
         self.sweeping = False
+        self.clamped = False
+
+    def hold_position_clamp(self) -> None:
+        self.clamped = True
 
     def stop(self) -> None:
         self.stops += 1
         self.sweeping = False
 
     def set_zero(self) -> None:
+        self.zero_calls += 1
         self.pos = 0
         self._update_di()
 
@@ -223,6 +230,39 @@ def test_fail_fast_on_alarm(app):
     assert results and "0x3120" in results[0]
     assert hs.running is False
     assert fake.disabled >= 1
+
+
+def test_software_homing_zeroes_at_edge_and_clamps(app):
+    """软件回零: 与测距同协议(sweep→回退→细搜)，边沿设零并夹持，不脱机结束。"""
+    fake = FakeMotor(sensor_pos=-1333, window=50)
+    hs = HomeSearch(fake)
+    homed = []
+    hs.homed.connect(lambda: homed.append(True))
+    hs.failed.connect(lambda r: homed.append(("fail", r)))
+    hs.start_homing(pulses_per_sec=960)
+    _drive(hs, fake, homed)
+    assert homed == [True]
+    assert fake.zero_calls == 2      # 开始清零一次 + 边沿设零一次
+    assert fake.pos == 0             # 边沿即新的 home 基准
+    assert fake.clamped is True      # 结束保持使能夹持(而非脱机)
+    assert fake.di_config_writes == []
+    assert hs.running is False
+
+
+def test_software_homing_fail_fast_on_alarm(app):
+    """软件回零途中报警同样快失败，且不夹持。"""
+    fake = FakeMotor(sensor_pos=-5000)
+    hs = HomeSearch(fake)
+    results = []
+    hs.failed.connect(lambda r: results.append(r))
+    hs.start_homing(pulses_per_sec=960)
+    for _ in range(3):
+        fake.tick()
+    fake.alarm_code = 0x3120
+    fake.tick()
+    assert results and "0x3120" in results[0]
+    assert fake.clamped is False
+    assert hs.running is False
 
 
 def test_fail_when_sensor_unreachable(app):

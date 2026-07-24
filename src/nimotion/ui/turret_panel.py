@@ -28,7 +28,7 @@ from ..models.turret import (
     save_backlash_deg,
     save_calibration,
 )
-from ..models.types import HomingConfig, MotorStatus
+from ..models.types import MotorStatus
 from ..services.home_search import HomeSearch
 from ..services.motor_service import MotorService
 from .widgets.turret_widget import TurretWidget
@@ -95,6 +95,7 @@ class TurretPanel(QWidget):
         # 软件搜索测距控制器
         self._search = HomeSearch(self._motor, di_bit=0, parent=self)
         self._search.finished.connect(self._on_search_finished)
+        self._search.homed.connect(self._on_homing_done)
         self._search.failed.connect(self._on_search_failed)
         self._search.progress.connect(self._on_search_progress)
 
@@ -271,12 +272,15 @@ class TurretPanel(QWidget):
     # -- 操作回调 --
 
     def _on_home(self) -> None:
-        """执行归零流程（方式21，负向原点开关回归）。"""
+        """执行归零（软件回零：与测距前3步同协议同参数，边沿设零+夹持）。"""
+        if self._search.running or self._microstep is None:
+            return
         self._homing = True
         self._set_moving(True)
-        self._status_label.setText("正在归零...")
+        self._status_label.setText("正在归零(软件回零)...")
         self._status_label.setStyleSheet("color: #FFA726;")
-        self._motor.configure_and_start_homing(HomingConfig())
+        pps = HomeSearch.SEARCH_SPEED * self._microstep
+        self._search.start_homing(pulses_per_sec=pps)
         self._moving_timer.start(self._HOME_TIMEOUT_MS)
 
     def _on_release(self) -> None:
@@ -285,8 +289,8 @@ class TurretPanel(QWidget):
         注意：开环电机，手动转动不会被计数器跟踪，之后必须重新回零
         才能做位置移动。
         """
-        if self._searching:
-            return  # 测距进行中有自己的中止/恢复路径，不在此打断
+        if self._searching or self._search.running:
+            return  # 测距/软件回零进行中有自己的中止/恢复路径，不在此打断
         self._homing = False
         self._pending_final = None
         self._moving_timer.stop()
@@ -357,6 +361,14 @@ class TurretPanel(QWidget):
         self._update_controls()
 
     def _on_search_failed(self, reason: str) -> None:
+        """测距/软件回零共用的失败处理(HomeSearch.failed)。"""
+        if self._homing:
+            self._homing = False
+            self._moving_timer.stop()
+            self._set_moving(False)
+            self._status_label.setText(f"归零失败: {reason}")
+            self._status_label.setStyleSheet("color: #F44336;")
+            return
         self._searching = False
         self._search_result.setText("距离: 失败")
         self._status_label.setText(f"测距失败: {reason}")
@@ -426,7 +438,7 @@ class TurretPanel(QWidget):
         self._update_controls()
 
     def _on_homing_done(self) -> None:
-        """回零完成（DI1 已恢复）：进入已归零状态，可开始对位标定。"""
+        """回零完成（软件回零边沿设零+夹持）：进入已归零状态，可对位标定。"""
         if not self._homing:
             return
         self._homing = False
@@ -500,7 +512,7 @@ class TurretPanel(QWidget):
     def _on_moving_timeout(self) -> None:
         """运动超时处理：停机并去使能，电流归零。
 
-        回零超时时额外做兜底清理(恢复回零前临时改小的加减速)。
+        回零(软件回零)超时时中止 HomeSearch(其 teardown 恢复速度并脱机)。
         """
         if not self._is_moving:
             return
@@ -509,7 +521,7 @@ class TurretPanel(QWidget):
         self._pending_final = None
         self._motor.stop()
         if was_homing:
-            self._motor.abort_homing_cleanup()  # 含停机脱机
+            self._search.cancel()  # teardown: 停机脱机+恢复最大速度
         else:
             self._motor.disable()
         self._set_moving(False)

@@ -22,7 +22,8 @@ from ..models.turret import (
     load_calibration,
     microstep_from_register,
 )
-from ..models.types import HomingConfig, MotorStatus
+from ..models.types import MotorStatus
+from ..services.home_search import HomeSearch
 from ..services.motor_service import MotorService
 
 # 一圈循环的步骤序列。"HOME" 为回零，其余为目标孔位。
@@ -55,8 +56,8 @@ class IntegrationTestTab(QWidget):
     运动命令异步非阻塞，本面板用状态机驱动：
     - 移动步：发出 move_absolute 后，先等 is_running 变 True（开始运动），
       再等变 False（运动结束），然后进入下一步。
-    - 回零步：发出 configure_and_start_homing 后，等 motor.homing_done 信号
-      （回零完成且 DI1 已恢复）后进入下一步。
+    - 回零步：软件回零（HomeSearch.start_homing，与测距前3步同协议同参数，
+      边沿设零+夹持），等 homed 信号后进入下一步。
     """
 
     _POLL_INTERVAL_MS = 500  # 状态轮询周期
@@ -92,10 +93,14 @@ class IntegrationTestTab(QWidget):
         self._pause_timer.setSingleShot(True)
         self._pause_timer.timeout.connect(self._on_pause_done)
 
+        # 软件回零控制器(与转盘页/测距同协议同参数)
+        self._homer = HomeSearch(self._motor, di_bit=0, parent=self)
+        self._homer.homed.connect(self._on_homing_done)
+        self._homer.failed.connect(self._on_homing_failed)
+
         self._init_ui()
 
         self._motor.status_updated.connect(self._on_status_updated)
-        self._motor.homing_done.connect(self._on_homing_done)
         self._motor.operation_done.connect(self._on_operation_done)
         self._motor._worker.disconnected.connect(self._on_disconnected)
 
@@ -236,6 +241,8 @@ class IntegrationTestTab(QWidget):
         self._poll_timer.stop()
         self._step_timer.stop()
         self._pause_timer.stop()
+        if self._homer.running and disable:
+            self._homer.cancel()  # 软件回零中止(teardown 恢复速度+脱机)
         if disable:
             self._motor.disable()
         self._start_btn.setEnabled(True)
@@ -251,10 +258,13 @@ class IntegrationTestTab(QWidget):
         self._update_loop_label()
         step = _SEQUENCE[self._step_idx]
         if step == _HOME:
+            assert self._microstep is not None
             self._phase = "homing"
-            self._step_label.setText("步骤: 回零中...")
+            self._step_label.setText("步骤: 回零中(软件回零)...")
             self._step_timer.start(self._HOME_TIMEOUT_MS)
-            self._motor.configure_and_start_homing(HomingConfig())
+            self._homer.start_homing(
+                pulses_per_sec=HomeSearch.SEARCH_SPEED * self._microstep
+            )
         else:
             assert self._position_pulses is not None
             target = self._position_pulses[step]
@@ -301,6 +311,11 @@ class IntegrationTestTab(QWidget):
             return
         self._advance_step()
 
+    def _on_homing_failed(self, reason: str) -> None:
+        if not self._running or self._phase != "homing":
+            return
+        self._finish(f"回零失败: {reason}", error=True)
+
     def _on_operation_done(self, success: bool, message: str) -> None:
         if not self._running or success:
             return
@@ -311,9 +326,6 @@ class IntegrationTestTab(QWidget):
         if not self._running:
             return
         self._motor.stop()
-        if self._phase == "homing":
-            # 回零超时兜底清理(恢复回零前临时改小的加减速)
-            self._motor.abort_homing_cleanup()
         self._finish("步骤超时，测试中止", error=True)
 
     def _on_disconnected(self) -> None:
