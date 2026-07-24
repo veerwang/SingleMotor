@@ -113,7 +113,7 @@ class HomingPanel(QWidget):
         form = QFormLayout()
         self._method_spin = QSpinBox()
         self._method_spin.setRange(17, 31)
-        self._method_spin.setValue(17)
+        self._method_spin.setValue(21)  # 21=负向原点开关回归(严禁用17负限位，转盘无限位)
         form.addRow("回归方式:", self._method_spin)
 
         self._offset_spin = QSpinBox()

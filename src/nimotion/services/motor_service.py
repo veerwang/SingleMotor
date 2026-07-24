@@ -55,6 +55,9 @@ class MotorService(QObject):
         (0x0016, 60, "怠机电流(0.6A)", False),
         (0x0017, 95, "加速电流(0.95A)", False),
         (0x0018, 95, "运行电流(0.95A)", False),
+        # DI1 常驻"原点开关"(设计要求: homing 传感器严禁配成限位，转盘无限位)。
+        # 普通移动经过传感器无副作用，回零(方式21)直接使用，无需临时切换。
+        (0x002C, 3, "DI功能(DI1=原点开关)", True),
     ]
 
     # 开机校准但不存 EEPROM 的运行时参数：每次连接写入 RAM。
@@ -77,8 +80,8 @@ class MotorService(QObject):
         self._homing_timeout = QTimer()
         self._homing_timeout.setSingleShot(True)
         self._homing_timeout.timeout.connect(self._on_homing_config_timeout)
-        # 回零完成后恢复 DI1 的轮询
-        self._homing_di_restore: int | None = None
+        # 回零进行中标志(完成检测/加减速恢复用；DI1 常驻原点开关，无需恢复)
+        self._homing_active = False
         # 回零是否已真正跑起来(见过 is_running=True)，防止触发后未起转的空闲帧被误判为完成
         self._homing_seen_running = False
         # 回零 grace 兜底：启动后过了 grace 仍空闲则也判完成，覆盖"已在 home 点、
@@ -204,8 +207,8 @@ class MotorService(QObject):
         self._write_control_word(0x0007)  # 使能
         self._write_control_word(0x000F)  # 运行
         self._write_control_word(0x001F)  # 触发
-        # 如果需要回零后恢复 DI1，启动轮询
-        if self._homing_di_restore is not None:
+        # 回零进行中则启动完成检测轮询
+        if self._homing_active:
             self._homing_poll_timer.start()
 
     def configure_and_start_homing(self, config: HomingConfig) -> None:
@@ -506,11 +509,12 @@ class MotorService(QObject):
         dev_zero_ret = self._homing_read_values[0x0072]
 
         diffs: list[str] = []
-        # 回零时强制 DI1=neg_limit(1)，method 17 依赖负限位信号
-        if dev_di1 != 1:
-            new_di_func = (dev_di_func & ~0x0F) | 1
+        # DI1=原点开关(3)，回归方式21(负向原点开关)依赖此信号。
+        # 设计要求: homing 传感器严禁配成限位(转盘无限位，自研固件会报FF0E)。
+        if dev_di1 != 3:
+            new_di_func = (dev_di_func & ~0x0F) | 3
             self._write_32bit(0x002C, new_di_func)
-            diffs.append(f"DI1功能 {dev_di1}->1(负限位)")
+            diffs.append(f"DI1功能 {dev_di1}->3(原点开关)")
         if dev_method != config.method:
             self._write_single(0x006B, config.method)
             diffs.append(f"回归方式 {dev_method}->{config.method}")
@@ -538,22 +542,22 @@ class MotorService(QObject):
 
         if diffs:
             # 不写 EEPROM：回零参数每次回零都先读后写重新应用(立即生效)，无需持久化；
-            # 且 DI1/加减速是临时值(回零后在 _check_homing_running 恢复原值)，若存 EEPROM
+            # 且加减速是临时值(回零后在 _check_homing_running 恢复原值)，若存 EEPROM
             # 会把加减速永久写成回零小值(断电后转盘定位变慢)，并且每次回零都磨损 EEPROM。
             msg = "已更新: " + ", ".join(diffs)
             self.homing_config_status.emit(msg)
         else:
             self.homing_config_status.emit("参数已一致，无需写入")
 
-        # 启动回零；完成后通过 status_updated 监测状态字恢复 DI1
-        self._homing_di_restore = dev_di_func  # 记录原始 DI 配置
+        # 启动回零；完成后通过 status_updated 监测状态字
+        self._homing_active = True
         self._homing_seen_running = False  # 等回零真正跑起来再判定完成
         self._homing_grace_over = False    # grace 兜底(已在 home 点再回零)
         self._homing_grace_timer.start()
         self.start_homing()
 
     def _poll_homing_done(self) -> None:
-        """轮询回零是否完成，完成后恢复 DI1 为无动作(0)"""
+        """轮询回零是否完成"""
         self.refresh_status()
 
     def _on_homing_grace_over(self) -> None:
@@ -563,7 +567,7 @@ class MotorService(QObject):
 
     def _check_homing_running(self, status: MotorStatus) -> None:
         """由 status_updated 信号触发，检测回零完成"""
-        if self._homing_di_restore is None:
+        if not self._homing_active:
             return
         # 必须先看到"运行中"，才认可之后的"停止"为回零完成；否则触发回零后电机尚未
         # 起转的空闲帧(is_running=False)会被误判为立即完成(表现为第一次回零秒返回成功、
@@ -575,14 +579,11 @@ class MotorService(QObject):
         if (self._homing_seen_running or self._homing_grace_over) and status.speed == 0:
             self._homing_grace_timer.stop()
             self._homing_poll_timer.stop()
-            # 先停机，避免写 DI 时 error=6 (slave busy)
+            self._homing_active = False
+            # 先停机，避免写加减速等参数时 error=6 (slave busy)
             self._write_control_word(0x0000)
-            # 恢复 DI1 为无动作(0)，保留其他 DI 配置
-            restore = (self._homing_di_restore & ~0x0F) | 0
-            self._write_32bit(0x002C, restore)
-            self._homing_di_restore = None
             # 恢复回零前改小的加减速为原值(0x005F/0x0061 全局共用，避免拖慢转盘定位)
-            msg = "回零完成，DI1 已恢复为无动作"
+            msg = "回零完成"
             if self._homing_accel_restore is not None:
                 self._write_32bit(0x005F, self._homing_accel_restore)
                 self._write_32bit(0x0061, self._homing_decel_restore)
@@ -601,6 +602,22 @@ class MotorService(QObject):
             msg += "，电机保持使能夹持"
             self.homing_config_status.emit(msg)
             self.homing_done.emit()
+
+    def abort_homing_cleanup(self) -> None:
+        """回零异常中止(超时/故障)时的兜底清理。
+
+        停机脱机，并恢复回零前临时改小的加减速(0x005F/0x0061 全局共用，
+        不恢复会拖慢转盘定位)。DI1 常驻原点开关，无需恢复。
+        """
+        self._homing_grace_timer.stop()
+        self._homing_poll_timer.stop()
+        self._homing_active = False
+        self._write_control_word(0x0000)  # 停机脱机(写参数需停机)
+        if self._homing_accel_restore is not None:
+            self._write_32bit(0x005F, self._homing_accel_restore)
+            self._write_32bit(0x0061, self._homing_decel_restore)
+            self._homing_accel_restore = None
+            self._homing_decel_restore = None
 
     def _on_homing_config_timeout(self) -> None:
         """回零配置读取超时"""

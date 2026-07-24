@@ -168,7 +168,7 @@ class TestMotionControl:
         service.homing_done.connect(lambda: done.append(True))
         with patch.object(mock_worker, "send_modbus"):
             # 模拟回零已启动(armed)
-            service._homing_di_restore = 0x00000001
+            service._homing_active = True
             service._homing_seen_running = False
             # 触发后电机尚未起转的空闲帧 -> 不应完成
             s0 = MotorStatus()
@@ -176,7 +176,7 @@ class TestMotionControl:
             s0.speed = 0
             service._check_homing_running(s0)
             assert done == []
-            assert service._homing_di_restore is not None  # 仍在回零中
+            assert service._homing_active is True  # 仍在回零中
             # 电机真正起转
             s1 = MotorStatus()
             s1.is_running = True
@@ -189,14 +189,14 @@ class TestMotionControl:
             s2.speed = 0
             service._check_homing_running(s2)
             assert done == [True]
-            assert service._homing_di_restore is None
+            assert service._homing_active is False
 
     def test_homing_grace_completes_when_already_home(self, service, mock_worker):
         """已在 home 点再回零、几乎不动(never see is_running)时 grace 兜底判完成。"""
         done = []
         service.homing_done.connect(lambda: done.append(True))
         with patch.object(mock_worker, "send_modbus"):
-            service._homing_di_restore = 0x00000001
+            service._homing_active = True
             service._homing_seen_running = False
             service._homing_grace_over = False
             # 未起转的空闲帧 + grace 未到 -> 不完成
@@ -205,7 +205,7 @@ class TestMotionControl:
             s0.speed = 0
             service._check_homing_running(s0)
             assert done == []
-            assert service._homing_di_restore is not None
+            assert service._homing_active is True
             # grace 到期
             service._on_homing_grace_over()
             assert service._homing_grace_over is True
@@ -215,7 +215,7 @@ class TestMotionControl:
             s1.speed = 0
             service._check_homing_running(s1)
             assert done == [True]
-            assert service._homing_di_restore is None
+            assert service._homing_active is False
 
 
 class TestParamOperations:

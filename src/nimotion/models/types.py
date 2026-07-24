@@ -103,7 +103,10 @@ class ModbusResponse:
 class HomingConfig:
     """原点回归配置参数"""
 
-    method: int = 17  # 0x006B, 回归方式 17=负限位开关回归
+    # 回归方式 21=负向原点开关回归(2026-07-24 硬件实测可用)。曾用 17=负限位
+    # 回归，但转盘无限位传感器，homing 传感器严禁配成限位(设计要求)——
+    # 自研固件会报 FF0E 超负限位故障。
+    method: int = 21  # 0x006B
     origin_offset: int = 0  # 0x0069, 原点偏移 (pulse, 32-bit signed)
     search_speed: int = 50  # 0x006C, 寻找开关速度 (Step/s, 0~15610)
     zero_speed: int = 10  # 0x006E, 寻找零位速度 (Step/s)，降为原 20 的 50% 提升重复定位精度
