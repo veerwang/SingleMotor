@@ -5,6 +5,7 @@ from __future__ import annotations
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QIntValidator
 from PyQt5.QtWidgets import (
+    QDoubleSpinBox,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -61,6 +62,7 @@ class IntegrationTestTab(QWidget):
     _POLL_INTERVAL_MS = 500  # 状态轮询周期
     _MOVE_TIMEOUT_MS = 30000  # 单次移动超时
     _HOME_TIMEOUT_MS = 60000  # 单次回零超时
+    _PAUSE_DEFAULT_S = 1.0  # 每步完成后的间歇默认值：怠机电流(0.15A)介入散热，降低占空比
 
     def __init__(self, motor_service: MotorService, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -73,7 +75,7 @@ class IntegrationTestTab(QWidget):
         self._target_loops = 0  # 0 = 无限
         self._loop_done = 0
         self._step_idx = 0
-        self._phase = "idle"  # idle / homing / wait_start / wait_stop
+        self._phase = "idle"  # idle / homing / wait_start / wait_stop / pausing
 
         # 状态轮询定时器（不依赖状态面板的「自动」勾选）
         self._poll_timer = QTimer(self)
@@ -84,6 +86,11 @@ class IntegrationTestTab(QWidget):
         self._step_timer = QTimer(self)
         self._step_timer.setSingleShot(True)
         self._step_timer.timeout.connect(self._on_step_timeout)
+
+        # 步间间歇定时器
+        self._pause_timer = QTimer(self)
+        self._pause_timer.setSingleShot(True)
+        self._pause_timer.timeout.connect(self._on_pause_done)
 
         self._init_ui()
 
@@ -122,6 +129,21 @@ class IntegrationTestTab(QWidget):
         count_row.addWidget(QLabel("（0 = 无限循环，直到点击停止）"))
         count_row.addStretch()
         gl.addLayout(count_row)
+
+        # 步间间歇时间
+        pause_row = QHBoxLayout()
+        pause_row.addWidget(QLabel("步间间歇:"))
+        self._pause_spin = QDoubleSpinBox()
+        self._pause_spin.setRange(0.0, 10.0)
+        self._pause_spin.setSingleStep(0.5)
+        self._pause_spin.setDecimals(1)
+        self._pause_spin.setValue(self._PAUSE_DEFAULT_S)
+        self._pause_spin.setSuffix(" 秒")
+        self._pause_spin.setFixedWidth(100)
+        pause_row.addWidget(self._pause_spin)
+        pause_row.addWidget(QLabel("（每步完成后停留散热，0 = 不间歇）"))
+        pause_row.addStretch()
+        gl.addLayout(pause_row)
 
         # 开始 / 停止 按钮
         btn_row = QHBoxLayout()
@@ -211,6 +233,7 @@ class IntegrationTestTab(QWidget):
         self._phase = "idle"
         self._poll_timer.stop()
         self._step_timer.stop()
+        self._pause_timer.stop()
         self._start_btn.setEnabled(True)
         self._count_edit.setEnabled(True)
         self._stop_btn.setEnabled(False)
@@ -237,7 +260,7 @@ class IntegrationTestTab(QWidget):
             self._motor.move_absolute(target)
 
     def _advance_step(self) -> None:
-        """当前步完成，前进到下一步；满一圈则计数。"""
+        """当前步完成，间歇 1s 后前进到下一步；满一圈则计数。"""
         self._step_timer.stop()
         self._step_idx += 1
         if self._step_idx >= len(_SEQUENCE):
@@ -246,6 +269,17 @@ class IntegrationTestTab(QWidget):
             if self._target_loops != 0 and self._loop_done >= self._target_loops:
                 self._finish(f"测试完成，共 {self._loop_done} 圈")
                 return
+        pause_ms = int(self._pause_spin.value() * 1000)
+        if pause_ms <= 0:
+            self._begin_step()
+            return
+        self._phase = "pausing"
+        self._step_label.setText(f"步骤: 间歇散热中({self._pause_spin.value():.1f}s)...")
+        self._pause_timer.start(pause_ms)
+
+    def _on_pause_done(self) -> None:
+        if not self._running or self._phase != "pausing":
+            return
         self._begin_step()
 
     def _on_status_updated(self, status: MotorStatus) -> None:
