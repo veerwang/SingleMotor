@@ -45,7 +45,7 @@ class MotorService(QObject):
         # 最小速度(起停速度)必须 ≤ 最大速度，否则写最大速度会被拒(非法数据值)。
         # 必须排在最大速度之前先写小，再写最大速度 才能通过。
         (0x005D, 16, "最小速度", True),     # 16 Step/s (手册默认，起停速度)
-        (0x005B, 150, "最大速度", True),    # 150 Step/s (×16=2400 pulses/s ≈ 98°/s转盘)
+        (0x005B, 200, "最大速度", True),    # 200 Step/s (×16=3200 pulses/s ≈ 131°/s转盘, 2026-07-25 经理定值)
         # 电流参数: 2026-07-24 验收定稿，该型号产品统一出厂配置，固化 EEPROM。
         # 依据: 带2物镜丢步(出厂0.51A/0.7A均丢步，0.85A起不丢)；电机额定1.2A
         # 但驱动器(SDM4203-485-A-I)固件上限95=0.95A(写96即拒绝err=3)，取上限。
@@ -55,6 +55,10 @@ class MotorService(QObject):
         (0x0016, 60, "怠机电流(0.6A)", False),
         (0x0017, 95, "加速电流(0.95A)", False),
         (0x0018, 95, "运行电流(0.95A)", False),
+        # 经理要求减速电流与加速电流一致。注意 2026-07-25 两台实测: 固件对该
+        # 寄存器写入返回正常回显但静默丢弃(回读恒为0)——每次连接会重写一次且
+        # 显示"已校准"，实际不生效，待原厂固件修复后自动生效(见问题反馈单)。
+        (0x0015, 95, "减速电流(0.95A)", False),
         # DI1 常驻"原点开关"(设计要求: homing 传感器严禁配成限位，转盘无限位)。
         # 普通移动经过传感器无副作用，回零(方式21)直接使用，无需临时切换。
         (0x002C, 3, "DI功能(DI1=原点开关)", True),
@@ -252,7 +256,8 @@ class MotorService(QObject):
             return
         self._init_phase = "reading"
         self._init_read_values.clear()
-        self._init_timeout.start(3000)
+        # 12+ 次读取共用一个总超时；串口单次读超时 0.5s，最坏情况约 6s，取 8s
+        self._init_timeout.start(8000)
         for addr, _val, _name, is_32bit in self.INIT_PARAMS + self.RUNTIME_PARAMS:
             self.read_param(addr, 2 if is_32bit else 1)
 
@@ -264,6 +269,7 @@ class MotorService(QObject):
         self._init_timeout.stop()
         self._init_phase = "done"
 
+        print(f"[校准] 读取完成: { {f'0x{a:04X}': v for a, v in sorted(self._init_read_values.items())} }", flush=True)
         diffs: list[str] = []
         for addr, expected, name, is_32bit in self.INIT_PARAMS:
             current = self._init_read_values[addr]
@@ -301,8 +307,13 @@ class MotorService(QObject):
 
     def _on_init_config_timeout(self) -> None:
         """首次校准读取超时"""
+        needed = {addr for addr, _, _, _ in self.INIT_PARAMS + self.RUNTIME_PARAMS}
+        missing = sorted(needed - set(self._init_read_values))
         self._init_phase = "idle"
-        self.init_config_done.emit("参数校准超时，跳过")
+        self.init_config_done.emit(
+            "参数校准超时，跳过(未响应: "
+            + ", ".join(f"0x{a:04X}" for a in missing) + ")"
+        )
 
     # -- 参数操作 --
 
@@ -395,6 +406,7 @@ class MotorService(QObject):
     def _on_response(self, resp: ModbusResponse) -> None:
         """处理通讯线程返回的响应"""
         if resp.is_error:
+            print(f"[通讯错误] {self._format_error(resp)}", flush=True)
             self.operation_done.emit(False, self._format_error(resp))
             return
 

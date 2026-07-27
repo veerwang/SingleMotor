@@ -13,8 +13,8 @@ fine，同参数)，fine 找到边沿后**就地设零**建立 home 基准，随
 
 防走样约束: 感应窗口实测仅约 50 脉冲宽(home 边沿起 -10~-55, ≈2°转盘)。
 sweep 速度必须满足 窗口穿越时间 ≥ 2×轮询周期，否则两次轮询之间会整个跨过
-窗口。SWEEP_SPEED=25 Step/s(×16=400 pulses/s) → 穿越 125ms ≥ 2~3 个 50ms
-轮询周期。若产品批次窗口更窄需相应降速。
+窗口。SWEEP_SPEED=50 Step/s(×16=800 pulses/s) → 穿越 62.5ms ≥ 2~3 个 25ms
+轮询周期。若产品批次窗口更窄需相应降速(或缩短 POLL_MS)。
 
 注: DI1 常驻"原点开关"配置，搜索只读取 DI 电平，不改 DI 功能。设计要求
 homing 传感器严禁配成限位(转盘无限位，自研固件会报 FF0E 超负限位故障)。
@@ -43,8 +43,8 @@ class HomeSearch(QObject):
     homed = pyqtSignal()         # 软件回零完成: 已在边沿设零并夹持
     failed = pyqtSignal(str)     # 失败原因(两种模式共用)
 
-    SWEEP_SPEED = 25             # sweep 连续扫描速度(Step/s)，见模块注释防走样约束
-    POLL_MS = 50                 # sweep 期间状态轮询周期
+    SWEEP_SPEED = 50             # sweep 连续扫描速度(Step/s)，见模块注释防走样约束
+    POLL_MS = 25                 # sweep 期间状态轮询周期
     FINE_STEP = 5                # 细搜步长(脉冲)，决定最终精度
     BACKOFF = 150                # 触发后回退步长(释放开关)
     MAX_TRAVEL = 10000           # 搜索行程上限(>转盘一圈 8800)

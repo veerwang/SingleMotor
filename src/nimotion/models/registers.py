@@ -69,7 +69,7 @@ HOLDING_REGISTERS: list[RegisterDef] = [
     RegisterDef(
         0x0015, "减速电流", RegisterType.HOLDING, DataType.UINT16, 1,
         unit="x10mA", min_val=0, max_val=95, default_val=0,
-        description="实际电流=值x10mA; 驱动器上限95(0.95A, 固件实测); 本机出厂值0",
+        description="实际电流=值x10mA; 应与加速电流一致(经理要求, 目标95); 驱动器上限95(0.95A, 固件实测); 本机出厂值0; 2026-07实测拒写待固件确认",
     ),
     RegisterDef(
         0x0016, "怠机电流", RegisterType.HOLDING, DataType.UINT16, 1,

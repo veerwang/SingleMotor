@@ -117,7 +117,8 @@ class MainWindow(QMainWindow):
         self._bytes_label.setText(f"TX: {tx}  RX: {rx}")
 
     def _on_init_config_done(self, msg: str) -> None:
-        self._status_bar.showMessage(msg, 5000)
+        print(f"[校准] {msg}", flush=True)
+        self._status_bar.showMessage(msg, 15000)
 
     def closeEvent(self, event) -> None:
         """关闭窗口时断开串口"""
