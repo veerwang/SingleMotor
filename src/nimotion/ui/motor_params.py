@@ -23,7 +23,8 @@ from ..services.motor_service import MotorService
 # 参数分组: (组名, 地址列表, 是否只读)
 PARAM_GROUPS: list[tuple[str, list[int], bool]] = [
     ("通讯参数（只读）", [0x0000, 0x0001, 0x0002], True),
-    ("电流参数", [0x0016, 0x0018, 0x0017, 0x0015, 0x0019], False),
+    # 0x0015 减速电流已屏蔽: SDM42 驱动器无减速电流(2026-07-27 经理指示)
+    ("电流参数", [0x0016, 0x0018, 0x0017, 0x0019], False),
     ("运动参数", [0x001A, 0x005B, 0x005D, 0x005F, 0x0061], False),
     ("停机设置", [0x003A, 0x003B, 0x003C], False),
 ]
