@@ -74,7 +74,7 @@ HOLDING_REGISTERS: list[RegisterDef] = [
     RegisterDef(
         0x0016, "怠机电流", RegisterType.HOLDING, DataType.UINT16, 1,
         unit="x10mA", min_val=0, max_val=95, default_val=15,
-        description="实际电流=值x10mA; 电机空闲时的保持电流; 越大发热越大; 写入需先停机; 本机出厂值15(0.15A)",
+        description="电机空闲时的保持电流; 越大发热越大; 写入需先停机; 经理定值21=0.69A(按经理给定换算, 2026-07-27); 本机出厂值15",
     ),
     RegisterDef(
         0x0017, "加速电流", RegisterType.HOLDING, DataType.UINT16, 1,
