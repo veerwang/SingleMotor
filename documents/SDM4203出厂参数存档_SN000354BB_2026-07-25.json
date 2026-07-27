@@ -1,0 +1,478 @@
+{
+ "identity": {
+  "厂商名称": "0x01222340",
+  "产品序列号": "0x000354BB",
+  "硬件版本号": "0x42030202",
+  "软件版本号": "0x000102B6"
+ },
+ "params": [
+  {
+   "addr": 0,
+   "name": "从站地址",
+   "value": 1,
+   "unit": "",
+   "default": 1,
+   "range": "1~247",
+   "desc": ""
+  },
+  {
+   "addr": 1,
+   "name": "波特率",
+   "value": 5,
+   "unit": "",
+   "default": 5,
+   "range": "0~9",
+   "desc": "0=9.6k 1=9.6k 2=19.2k 3=38.4k 4=57.6k 5=115.2k 6=256k 7=500k"
+  },
+  {
+   "addr": 2,
+   "name": "网络数据格式",
+   "value": 2,
+   "unit": "",
+   "default": 2,
+   "range": "0~3",
+   "desc": "0=8E1(偶校验) 1=8O1(奇校验) 2=8N1(无校验) 3=8N2(无校验,2停止位)"
+  },
+  {
+   "addr": 3,
+   "name": "Modbus返回等待时间",
+   "value": 0,
+   "unit": "ms",
+   "default": 0,
+   "range": "0~10000",
+   "desc": "Modbus通信请求到响应的额外等待时间,即使设0也会有时间延迟"
+  },
+  {
+   "addr": 8,
+   "name": "保存所有参数",
+   "value": 1,
+   "unit": "",
+   "default": null,
+   "range": "",
+   "desc": "写 0x7376 保存; 读参数为1=支持"
+  },
+  {
+   "addr": 11,
+   "name": "恢复默认参数",
+   "value": 1,
+   "unit": "",
+   "default": null,
+   "range": "",
+   "desc": "写 0x6C64 恢复所有参数制造商默认值"
+  },
+  {
+   "addr": 14,
+   "name": "电阻",
+   "value": 0,
+   "unit": "mOhm",
+   "default": 290,
+   "range": "",
+   "desc": "电机的相电阻"
+  },
+  {
+   "addr": 16,
+   "name": "电感",
+   "value": 0,
+   "unit": "uH",
+   "default": 1770,
+   "range": "",
+   "desc": "电机的相电感"
+  },
+  {
+   "addr": 18,
+   "name": "反应电动势系数",
+   "value": 0,
+   "unit": "mV/Hz",
+   "default": 46,
+   "range": "",
+   "desc": "电机的反应电动势系数"
+  },
+  {
+   "addr": 20,
+   "name": "电压",
+   "value": 0,
+   "unit": "V",
+   "default": 24,
+   "range": "",
+   "desc": "电源的电压"
+  },
+  {
+   "addr": 21,
+   "name": "减速电流",
+   "value": 0,
+   "unit": "x10mA",
+   "default": 0,
+   "range": "0~95",
+   "desc": "实际电流=值x10mA; 应与加速电流一致(经理要求, 目标95); 驱动器上限95(0.95A, 固件实测); 本机出"
+  },
+  {
+   "addr": 22,
+   "name": "怠机电流",
+   "value": 15,
+   "unit": "x10mA",
+   "default": 15,
+   "range": "0~95",
+   "desc": "实际电流=值x10mA; 电机空闲时的保持电流; 越大发热越大; 写入需先停机; 本机出厂值15(0.15A)"
+  },
+  {
+   "addr": 23,
+   "name": "加速电流",
+   "value": 63,
+   "unit": "x10mA",
+   "default": 63,
+   "range": "0~95",
+   "desc": "实际电流=值x10mA; 加速/堵转阶段的最大电流; 驱动器上限95(0.95A); 本机出厂值63(0.63A)"
+  },
+  {
+   "addr": 24,
+   "name": "运行电流",
+   "value": 41,
+   "unit": "x10mA",
+   "default": 51,
+   "range": "0~95",
+   "desc": "实际电流=值x10mA; 正常运行时的最大电流; 驱动器上限95(0.95A), 电机额定1.2A给不满; 本机出厂值5"
+  },
+  {
+   "addr": 25,
+   "name": "过载电流",
+   "value": 8,
+   "unit": "x100mA",
+   "default": 8,
+   "range": "0~95",
+   "desc": "实际电流=值x100mA(注意与0x15~0x18单位不同,手册明确); 触发过流报警阈值; 应>加速>运行; 本机出厂"
+  },
+  {
+   "addr": 26,
+   "name": "细分",
+   "value": 3,
+   "unit": "",
+   "default": 7,
+   "range": "0~7",
+   "desc": "0=Full 1=Half 2=1:4 3=1:8 4=1:16 5=1:32 6=1:64 7=1:128; 非28系"
+  },
+  {
+   "addr": 31,
+   "name": "驱动参数",
+   "value": 1,
+   "unit": "",
+   "default": 1,
+   "range": "0~1",
+   "desc": "低速优化 Low speed optimization; 0=禁用 1=启用"
+  },
+  {
+   "addr": 44,
+   "name": "输入特殊功能",
+   "value": 0,
+   "unit": "",
+   "default": 0,
+   "range": "",
+   "desc": "4字节,0~3位=DI1,每DI占4位: 0=无动作 1=负限位 2=正限位 3=原点开关 4=立即停机 5=减速停机 "
+  },
+  {
+   "addr": 46,
+   "name": "输入极性取反",
+   "value": 0,
+   "unit": "",
+   "default": 0,
+   "range": "",
+   "desc": "8位,第0位=DI1,依次类推; 0=不取反 1=取反"
+  },
+  {
+   "addr": 47,
+   "name": "输入上拉使能",
+   "value": 0,
+   "unit": "",
+   "default": 0,
+   "range": "",
+   "desc": "8位,第0位=DIO,依次类推; 0=无效 1=使能; 注:仅57系列有效"
+  },
+  {
+   "addr": 48,
+   "name": "输入触发方式",
+   "value": 69905,
+   "unit": "",
+   "default": 69905,
+   "range": "",
+   "desc": "4字节,0~3位=DI1,每DI占4位: 0=无效 1=上升沿 2=下降沿 3=上升/下降沿"
+  },
+  {
+   "addr": 52,
+   "name": "I/O端口配置",
+   "value": 0,
+   "unit": "",
+   "default": 0,
+   "range": "",
+   "desc": "8位,第0位=DX1: 0=配置输入 1=配置输出"
+  },
+  {
+   "addr": 53,
+   "name": "故障安全输出",
+   "value": 0,
+   "unit": "",
+   "default": 0,
+   "range": "",
+   "desc": "8位,第0位=DO1: 0=保留上次输出值 1=按故障安全预定值输出"
+  },
+  {
+   "addr": 54,
+   "name": "故障安全预定",
+   "value": 0,
+   "unit": "",
+   "default": 0,
+   "range": "",
+   "desc": "8位,第0位=DO1: 每位值=故障安全状态预定值"
+  },
+  {
+   "addr": 55,
+   "name": "数字量输出",
+   "value": 0,
+   "unit": "",
+   "default": 0,
+   "range": "",
+   "desc": "4字节,高16位=DO输出值,低16位=DO特殊功能值"
+  },
+  {
+   "addr": 57,
+   "name": "运行模式",
+   "value": 1,
+   "unit": "",
+   "default": 1,
+   "range": "1~4",
+   "desc": "1=位置模式 2=速度模式 3=原点回归 4=脉冲输入(仅57H); 非57H:1~3, 57H:1~4"
+  },
+  {
+   "addr": 58,
+   "name": "操作启停设置",
+   "value": 1,
+   "unit": "",
+   "default": 1,
+   "range": "0~1",
+   "desc": "0=无减速度停机 1=按减速度停机"
+  },
+  {
+   "addr": 59,
+   "name": "急停操作设置",
+   "value": 0,
+   "unit": "",
+   "default": 1,
+   "range": "0~1",
+   "desc": "0=无减速度停机 1=按减速度停机"
+  },
+  {
+   "addr": 60,
+   "name": "故障操作设置",
+   "value": 0,
+   "unit": "",
+   "default": 0,
+   "range": "0~1",
+   "desc": "0=无减速度停机 1=按减速度停机"
+  },
+  {
+   "addr": 67,
+   "name": "失速检测阈值",
+   "value": 0,
+   "unit": "100mA",
+   "default": 80,
+   "range": "0~100",
+   "desc": "STM86: 100mA单位,0~100,默认80; 非86: mA单位,0~4000,默认3000"
+  },
+  {
+   "addr": 71,
+   "name": "设置零点",
+   "value": 1,
+   "unit": "",
+   "default": null,
+   "range": "",
+   "desc": "写 0x535A 设置零点; 读参数=1表示支持指令"
+  },
+  {
+   "addr": 72,
+   "name": "设置原点",
+   "value": 1,
+   "unit": "",
+   "default": null,
+   "range": "",
+   "desc": "写 0x5348 设置原点; 读参数=1表示支持指令"
+  },
+  {
+   "addr": 81,
+   "name": "运动控制字",
+   "value": 0,
+   "unit": "",
+   "default": null,
+   "range": "",
+   "desc": "参照手册第3节 Control word"
+  },
+  {
+   "addr": 82,
+   "name": "运动方向",
+   "value": 0,
+   "unit": "",
+   "default": 0,
+   "range": "0~1",
+   "desc": "0=反转 Reverse 1=正转 Forward"
+  },
+  {
+   "addr": 83,
+   "name": "目标位置",
+   "value": 0,
+   "unit": "pulse",
+   "default": 0,
+   "range": "",
+   "desc": "电机运动停止时的绝对位置"
+  },
+  {
+   "addr": 85,
+   "name": "目标速度",
+   "value": 500,
+   "unit": "Step/s",
+   "default": 100,
+   "range": "0~15610",
+   "desc": "速度模式下目标速度"
+  },
+  {
+   "addr": 87,
+   "name": "位置最小值",
+   "value": 0,
+   "unit": "pulse",
+   "default": 0,
+   "range": "",
+   "desc": "软件下限,小于此值不再运动"
+  },
+  {
+   "addr": 89,
+   "name": "位置最大值",
+   "value": 0,
+   "unit": "pulse",
+   "default": 0,
+   "range": "",
+   "desc": "软件上限,大于此值不再运动"
+  },
+  {
+   "addr": 91,
+   "name": "最大速度",
+   "value": 250,
+   "unit": "Step/s",
+   "default": 250,
+   "range": "0~15610",
+   "desc": "允许电机运行的最大速度"
+  },
+  {
+   "addr": 93,
+   "name": "最小速度",
+   "value": 16,
+   "unit": "Step/s",
+   "default": 16,
+   "range": "0~1000",
+   "desc": "当驱动参数3=1时默认为0"
+  },
+  {
+   "addr": 95,
+   "name": "加速度",
+   "value": 2000,
+   "unit": "Step/s²",
+   "default": 1000,
+   "range": "1~59590",
+   "desc": "从当前速度到目标速度的加速率"
+  },
+  {
+   "addr": 97,
+   "name": "减速度",
+   "value": 2000,
+   "unit": "Step/s²",
+   "default": 1000,
+   "range": "1~59590",
+   "desc": "从当前速度到目标速度的减速率"
+  },
+  {
+   "addr": 105,
+   "name": "原点偏移值",
+   "value": 0,
+   "unit": "pulse",
+   "default": 0,
+   "range": "",
+   "desc": ""
+  },
+  {
+   "addr": 107,
+   "name": "原点回归方式",
+   "value": 30,
+   "unit": "",
+   "default": 17,
+   "range": "17~31",
+   "desc": "17~30=寻找开关方式; 31=快速回归(内部设定)"
+  },
+  {
+   "addr": 108,
+   "name": "寻找开关速度",
+   "value": 100,
+   "unit": "Step/s",
+   "default": 100,
+   "range": "0~15610",
+   "desc": "原点回归时寻找限位/原点开关的速度"
+  },
+  {
+   "addr": 110,
+   "name": "寻找零位速度",
+   "value": 16,
+   "unit": "Step/s",
+   "default": 100,
+   "range": "0~15610",
+   "desc": "原点回归时寻找零点位置的速度"
+  },
+  {
+   "addr": 114,
+   "name": "零点回归",
+   "value": 0,
+   "unit": "",
+   "default": 0,
+   "range": "0~1",
+   "desc": "原点回归完后是否运行到零点; 0x01=启用 0x00=禁用"
+  },
+  {
+   "addr": 115,
+   "name": "清空错误存储器",
+   "value": 1,
+   "unit": "",
+   "default": null,
+   "range": "",
+   "desc": "发送 0x6C64 清零所有错误寄存器"
+  },
+  {
+   "addr": 116,
+   "name": "硬件自检",
+   "value": 0,
+   "unit": "",
+   "default": null,
+   "range": "",
+   "desc": "发送 0x7465 进行硬件自检"
+  },
+  {
+   "addr": 117,
+   "name": "用户程序控制",
+   "value": null,
+   "unit": "",
+   "default": 0,
+   "range": "0~3",
+   "desc": "0x00=禁止 0x01=使能 0x02=启动 0x03=停止; 仅一体化电机嵌入式软件"
+  },
+  {
+   "addr": 118,
+   "name": "用户程序状态",
+   "value": null,
+   "unit": "",
+   "default": 0,
+   "range": "",
+   "desc": "只读; Bit8=上电启动 Bit4=程序运行 Bit0=程序存在; 仅一体化电机嵌入式软件"
+  },
+  {
+   "addr": 123,
+   "name": "电压电流模式",
+   "value": null,
+   "unit": "",
+   "default": 0,
+   "range": "0~1",
+   "desc": "仅86一体化和57驱动模块; 0x00=电压模式 0x01=电流模式"
+  }
+ ]
+}
