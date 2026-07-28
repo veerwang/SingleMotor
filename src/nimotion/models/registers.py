@@ -79,17 +79,17 @@ HOLDING_REGISTERS: list[RegisterDef] = [
     RegisterDef(
         0x0017, "加速电流", RegisterType.HOLDING, DataType.UINT16, 1,
         unit="x10mA", min_val=0, max_val=95, default_val=63,
-        description="加速/堵转阶段的最大电流(官方上位机称堵转电流, 同一寄存器); 经理定值87=2.75A, 与运行电流一致(2026-07-27); 本机出厂值63",
+        description="实际电流=值x10mA; 加速/堵转阶段的最大电流; 驱动器上限95(0.95A); 本机出厂值63(0.63A)",
     ),
     RegisterDef(
         0x0018, "运行电流", RegisterType.HOLDING, DataType.UINT16, 1,
         unit="x10mA", min_val=0, max_val=95, default_val=51,
-        description="正常运行时的最大电流; 经理定值87=2.75A(2026-07-27); 本机出厂值51",
+        description="实际电流=值x10mA; 正常运行时的最大电流; 驱动器上限95(0.95A), 电机额定1.2A给不满; 本机出厂值51(0.51A)",
     ),
     RegisterDef(
         0x0019, "过载电流", RegisterType.HOLDING, DataType.UINT16, 1,
         unit="x100mA", min_val=0, max_val=95, default_val=8,
-        description="触发过流报警阈值; 应>加速>运行; 经理定值7=3A(按经理给定换算, 2026-07-27); 本机出厂值8",
+        description="实际电流=值x100mA(注意与0x15~0x18单位不同,手册明确); 触发过流报警阈值; 应>加速>运行; 本机出厂值8(0.8A)",
     ),
     # ── 运动参数 ──
     RegisterDef(
