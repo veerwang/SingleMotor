@@ -45,10 +45,12 @@ class HomeSearch(QObject):
 
     SWEEP_SPEED = 50             # sweep 连续扫描速度(Step/s)，见模块注释防走样约束
     POLL_MS = 25                 # sweep 期间状态轮询周期
-    FINE_STEP = 5                # 细搜步长(脉冲)，决定最终精度
-    BACKOFF = 150                # 触发后回退步长(释放开关)
+    FINE_STEP = 2                # 细搜步长(脉冲)，决定最终精度
+    BACKOFF = 90                 # 触发后回退步长(释放开关)。停点最深在边沿下方
+                                 # ~40脉冲(轮询量化20+停车距离20)，90一次可出窗，
+                                 # 循环兜底；取小减少细搜空走步数(2026-07-28 经理定值)
     MAX_TRAVEL = 10000           # 搜索行程上限(>转盘一圈 8800)
-    FINE_TRAVEL_LIMIT = 400      # 细搜行程上限(回退150+窗口50+裕量)，防误触发后无限细搜
+    FINE_TRAVEL_LIMIT = 200      # 细搜行程上限(回退90+窗口50+裕量)，防误触发后无限细搜
     SETTLE_MARGIN_MS = 300       # 单步整定裕量
     STOP_SETTLE_MS = 400         # sweep 触发停机后的整定时间
     OVERALL_TIMEOUT_MS = 120000  # 总看门狗

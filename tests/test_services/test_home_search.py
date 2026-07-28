@@ -128,9 +128,9 @@ def test_search_measures_distance_and_returns(app):
     hs.start(pulses_per_sec=960, return_to_start=True)
     _drive(hs, fake, results)
 
-    # sweep 停在 -1340(20 步进网格)，回退后细搜(步长5)首个 ≤ -1333 的采样点
-    # 是 -1335，量化误差 < FINE_STEP
-    assert results == [("ok", 1335)]
+    # sweep 停在 -1340(20 步进网格)，回退90后细搜(步长2)首个 ≤ -1333 的采样点
+    # 是 -1334，量化误差 < FINE_STEP
+    assert results == [("ok", 1334)]
     assert fake.pos == 0          # 已返回起点
     assert fake.di_config_writes == []  # 搜索全程不改 DI 配置(严禁配限位)
     assert fake.stops >= 1          # sweep 触发后发过减速停机
@@ -170,7 +170,7 @@ def test_narrow_window_not_skipped(app):
     hs.failed.connect(lambda r: results.append(("fail", r)))
     hs.start(pulses_per_sec=960, return_to_start=False)
     _drive(hs, fake, results)
-    assert results == [("ok", 1335)]
+    assert results == [("ok", 1334)]
 
 
 def test_start_inside_window_skips_sweep(app):
