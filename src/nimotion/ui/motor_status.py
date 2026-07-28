@@ -49,6 +49,7 @@ class MotorStatusPanel(QWidget):
         self._timer.timeout.connect(self._on_poll)
         self._motor.status_updated.connect(self._update_display)
         self._motor._worker.disconnected.connect(self._on_disconnected)
+        self._motor._worker.connected.connect(self._on_reconnected)
         self.setFixedWidth(220)
         self._init_ui()
 
@@ -139,6 +140,14 @@ class MotorStatusPanel(QWidget):
         """设备断连时停止自动轮询。"""
         self._timer.stop()
         self._auto_cb.setChecked(False)
+
+    def _on_reconnected(self) -> None:
+        """连接(含重连)时恢复自动轮询。
+
+        转盘/回零/集成测试的完成检测都依赖状态帧；若重连后不恢复，
+        移动会在电机实际到位的情况下报"运动超时"。
+        """
+        self._auto_cb.setChecked(True)
 
     def _update_display(self, status: MotorStatus) -> None:
         # 状态
