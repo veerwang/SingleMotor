@@ -13,14 +13,17 @@ fine，同参数)，fine 找到边沿后**就地设零**建立 home 基准，随
 
 防走样约束: 感应窗口实测仅约 50 脉冲宽(home 边沿起 -10~-55, ≈2°转盘)。
 sweep 速度必须满足 窗口穿越时间 ≥ 2×轮询周期，否则两次轮询之间会整个跨过
-窗口。SWEEP_SPEED=50 Step/s(×16=800 pulses/s) → 穿越 62.5ms ≥ 2~3 个 25ms
-轮询周期。若产品批次窗口更窄需相应降速(或缩短 POLL_MS)。
+窗口。SWEEP_SPEED=60 Step/s(×16=960 pulses/s) → 穿越 52ms ≥ 2~3 个 20ms
+轮询周期。若产品批次窗口更窄需相应降速(或缩短 POLL_MS)。另: 停车距离
+(29脉冲)+检测滞后(20)最深 49 脉冲 < BACKOFF(60)，回退后必在边沿上方。
 
 注: DI1 常驻"原点开关"配置，搜索只读取 DI 电平，不改 DI 功能。设计要求
 homing 传感器严禁配成限位(转盘无限位，自研固件会报 FF0E 超负限位故障)。
 
 搜索期间临时把最大速度(0x005B)降为 SEARCH_SPEED(先读原值，结束/失败恢复)，
 作用于回退/细搜/返回的点动精度；sweep 用速度模式目标速度(0x0055)，独立设置。
+细搜阶段另临时把加速度(0x005F)降为 FINE_ACCEL 软化微步逼近(2026-07-28 经理
+定值)，转 returning 或结束时恢复原值；减速度(0x0061)不动。
 
 异常快失败: 任一状态帧带报警码(如欠压 3120)立即停机报错，不傻等看门狗。
 """
@@ -33,6 +36,7 @@ from ..models.types import MotorStatus
 from .motor_service import MotorService
 
 _MAX_SPEED_ADDR = 0x005B        # 最大速度(UINT32, Step/s)
+_ACCEL_ADDR = 0x005F            # 加速度(UINT32, Step/s²)
 
 
 class HomeSearch(QObject):
@@ -43,19 +47,21 @@ class HomeSearch(QObject):
     homed = pyqtSignal()         # 软件回零完成: 已在边沿设零并夹持
     failed = pyqtSignal(str)     # 失败原因(两种模式共用)
 
-    SWEEP_SPEED = 50             # sweep 连续扫描速度(Step/s)，见模块注释防走样约束
-    POLL_MS = 25                 # sweep 期间状态轮询周期
+    SWEEP_SPEED = 60             # sweep 连续扫描速度(Step/s)，见模块注释防走样约束
+                                 # (2026-07-28 经理定值 50→60)
+    POLL_MS = 20                 # sweep 期间状态轮询周期(2026-07-28 经理定值 25→20)
     FINE_STEP = 2                # 细搜步长(脉冲)，决定最终精度
-    BACKOFF = 90                 # 触发后回退步长(释放开关)。停点最深在边沿下方
-                                 # ~40脉冲(轮询量化20+停车距离20)，90一次可出窗，
-                                 # 循环兜底；取小减少细搜空走步数(2026-07-28 经理定值)
+    BACKOFF = 60                 # 触发后回退步长(释放开关)。停点最深在边沿下方
+                                 # ~40脉冲(轮询量化20+停车距离20)，60一次可出窗，
+                                 # 循环兜底；取小减少细搜空走步数(2026-07-28 经理定值 90→60)
     MAX_TRAVEL = 10000           # 搜索行程上限(>转盘一圈 8800)
-    FINE_TRAVEL_LIMIT = 200      # 细搜行程上限(回退90+窗口50+裕量)，防误触发后无限细搜
+    FINE_TRAVEL_LIMIT = 200      # 细搜行程上限(回退60+窗口50+裕量)，防误触发后无限细搜
     SETTLE_MARGIN_MS = 300       # 单步整定裕量
     STOP_SETTLE_MS = 400         # sweep 触发停机后的整定时间
     OVERALL_TIMEOUT_MS = 120000  # 总看门狗
     SEARCH_SPEED = 60            # 点动阶段临时最大速度(Step/s)
-    PREPARE_TIMEOUT_MS = 3000    # 读取原最大速度超时
+    FINE_ACCEL = 50              # 细搜阶段临时加速度(Step/s², 2026-07-28 经理定值 990→50)
+    PREPARE_TIMEOUT_MS = 3000    # 读取原最大速度/加速度超时
 
     def __init__(self, motor: MotorService, di_bit: int = 0, parent=None) -> None:
         super().__init__(parent)
@@ -72,6 +78,9 @@ class HomeSearch(QObject):
         self._mode = "measure"   # measure=测距 / home=软件回零
         self._pps = 480
         self._orig_speed: int | None = None  # 搜索前的最大速度，结束后恢复
+        self._orig_accel: int | None = None  # 搜索前的加速度，细搜降 200 后恢复
+        self._accel_lowered = False          # 细搜临时加速度是否已写入
+        self._prepare_reads: dict[int, int] = {}
 
         self._settle_timer = QTimer(self)
         self._settle_timer.setSingleShot(True)
@@ -118,26 +127,34 @@ class HomeSearch(QObject):
         self._fine_travel = 0
         self._sweeping = False
         self._orig_speed = None
+        self._orig_accel = None
+        self._accel_lowered = False
+        self._prepare_reads = {}
         # 先停机(写参数需停机)；DI 配置不动(DI1 常驻原点开关，只读电平)
         self._motor.disable()
         # 当前位置计数清 0
         self._motor.set_zero()
-        # 读当前最大速度(结束后恢复)，读到后临时降速再进入 sweep
+        # 读当前最大速度/加速度(结束后恢复)，读齐后临时降速再进入 sweep
         self._phase = "prepare"
         self._settling = False
         self._awaiting = False
         self._watchdog.start(self.OVERALL_TIMEOUT_MS)
         self._settle_timer.start(self.PREPARE_TIMEOUT_MS)  # 读取超时兜底
         self._motor.read_param(_MAX_SPEED_ADDR, 2)
+        self._motor.read_param(_ACCEL_ADDR, 2)
 
     # -- 内部 --
 
     def _on_param_read(self, addr: int, value: int) -> None:
-        if self._phase != "prepare" or addr != _MAX_SPEED_ADDR:
+        if self._phase != "prepare" or addr not in (_MAX_SPEED_ADDR, _ACCEL_ADDR):
+            return
+        self._prepare_reads[addr] = value
+        if len(self._prepare_reads) < 2:
             return
         self._settle_timer.stop()
-        self._orig_speed = value
-        if value != self.SEARCH_SPEED:
+        self._orig_speed = self._prepare_reads[_MAX_SPEED_ADDR]
+        self._orig_accel = self._prepare_reads[_ACCEL_ADDR]
+        if self._orig_speed != self.SEARCH_SPEED:
             self._motor.write_param_32bit(_MAX_SPEED_ADDR, self.SEARCH_SPEED)
         # 进入 sweep，先取首帧状态(覆盖起点已在窗口内的情况)
         self._phase = "sweep"
@@ -154,9 +171,20 @@ class HomeSearch(QObject):
         self._motor.move_relative(step)
         self._settle_timer.start(self._settle_for(step))
 
+    def _lower_accel_for_fine(self) -> None:
+        """细搜前临时降加速度(0x005F)软化微步逼近，转 returning/结束时恢复。"""
+        if self._orig_accel is not None and self._orig_accel != self.FINE_ACCEL:
+            self._motor.write_param_32bit(_ACCEL_ADDR, self.FINE_ACCEL)
+            self._accel_lowered = True
+
+    def _restore_accel(self) -> None:
+        if self._accel_lowered and self._orig_accel is not None:
+            self._motor.write_param_32bit(_ACCEL_ADDR, self._orig_accel)
+        self._accel_lowered = False
+
     def _on_settle_done(self) -> None:
         if self._phase == "prepare":
-            self._fail("读取最大速度超时")
+            self._fail("读取最大速度/加速度超时")
             return
         if self._phase == "stopping":
             # sweep 停机整定完毕，开始回退
@@ -213,6 +241,7 @@ class HomeSearch(QObject):
             else:
                 self._phase = "fine"
                 self._fine_travel = 0
+                self._lower_accel_for_fine()
                 self._jog(-self.FINE_STEP)
         elif self._phase == "fine":
             if triggered:
@@ -224,6 +253,7 @@ class HomeSearch(QObject):
                 self._measured = -pos       # 清 0 后触发点为负，距离取正
                 if self._return_to_start:
                     self._phase = "returning"
+                    self._restore_accel()   # 返回长行程不必用细搜低加速度
                     self._jog(+self._measured)
                 else:
                     self._finish()
@@ -257,7 +287,9 @@ class HomeSearch(QObject):
         self._motor.disable()                                   # 脱机(写参数需停机)
         if self._orig_speed is not None and self._orig_speed != self.SEARCH_SPEED:
             self._motor.write_param_32bit(_MAX_SPEED_ADDR, self._orig_speed)
+        self._restore_accel()
         self._orig_speed = None
+        self._orig_accel = None
         self._phase = "idle"
         self._settling = False
         self._awaiting = False

@@ -41,6 +41,8 @@ class FakeMotor(QObject):
         self.sweep_dir = -1
         self.max_speed = 600
         self.speed_writes: list[int] = []
+        self.accel = 1000
+        self.accel_writes: list[int] = []
         self.respond_to_read = True
 
     def disable(self) -> None:
@@ -65,8 +67,12 @@ class FakeMotor(QObject):
         self.sweep_dir = 1 if direction == 1 else -1
 
     def read_param(self, addr: int, count: int = 1) -> None:
-        if addr == 0x005B and self.respond_to_read:
+        if not self.respond_to_read:
+            return
+        if addr == 0x005B:
             self.param_read.emit(addr, self.max_speed)
+        elif addr == 0x005F:
+            self.param_read.emit(addr, self.accel)
 
     def write_param_32bit(self, addr: int, value: int, signed: bool = False) -> None:
         if addr == 0x002C:
@@ -74,6 +80,9 @@ class FakeMotor(QObject):
         elif addr == 0x005B:
             self.max_speed = value
             self.speed_writes.append(value)
+        elif addr == 0x005F:
+            self.accel = value
+            self.accel_writes.append(value)
 
     def move_relative(self, step: int) -> None:
         self.jogs.append(step)
@@ -128,7 +137,7 @@ def test_search_measures_distance_and_returns(app):
     hs.start(pulses_per_sec=960, return_to_start=True)
     _drive(hs, fake, results)
 
-    # sweep 停在 -1340(20 步进网格)，回退90后细搜(步长2)首个 ≤ -1333 的采样点
+    # sweep 停在 -1340(20 步进网格)，回退60后细搜(步长2)首个 ≤ -1333 的采样点
     # 是 -1334，量化误差 < FINE_STEP
     assert results == [("ok", 1334)]
     assert fake.pos == 0          # 已返回起点
@@ -200,6 +209,19 @@ def test_speed_lowered_during_search_and_restored(app):
     assert fake.max_speed == 600
 
 
+def test_fine_accel_lowered_and_restored(app):
+    """细搜阶段临时把加速度降为 FINE_ACCEL，转 returning/结束后恢复原值。"""
+    fake = FakeMotor(sensor_pos=-500)
+    hs = HomeSearch(fake)
+    results = []
+    hs.finished.connect(lambda d: results.append(d))
+    hs.start(pulses_per_sec=960, return_to_start=True)
+    _drive(hs, fake, results)
+    assert results == [500]
+    assert fake.accel_writes == [HomeSearch.FINE_ACCEL, 1000]  # 细搜降、返回前恢复
+    assert fake.accel == 1000
+
+
 def test_fail_when_speed_read_times_out(app):
     """读不到最大速度时失败并还原配置，不带病搜索。"""
     fake = FakeMotor(sensor_pos=-500)
@@ -210,7 +232,7 @@ def test_fail_when_speed_read_times_out(app):
     hs.failed.connect(lambda r: results.append(("fail", r)))
     hs.start(pulses_per_sec=960)
     hs._on_settle_done()  # 模拟读取超时到期
-    assert results == [("fail", "读取最大速度超时")]
+    assert results == [("fail", "读取最大速度/加速度超时")]
     assert fake.di_config_writes == []
     assert hs.running is False
 
