@@ -60,31 +60,32 @@ HOLDING_REGISTERS: list[RegisterDef] = [
         unit="V", default_val=24, restart_required=True,
         description="电源的电压",
     ),
-    # ── 电流参数（0x15~0x18 单位 x10mA，如 51=0.51A；0x19 单位 x100mA）──
-    # 单位依据 2026-07 硬件实测：出厂值 运行51/加速63/怠机15，按 x100mA 解读为
-    # 5~6A(电机早已烧毁)，按 x10mA 解读为 0.5~0.63A 且满足"过载>加速>运行"规则。
-    # 上限 95 为驱动器固件硬限制(2026-07-24 实测: 写96即拒绝 err=3)——电机绕组
-    # 额定 1.2A(用户 datasheet)，但一体化驱动级最大只能输出 0.95A。
+    # ── 电流参数（0x15~0x18 ≈31.6mA/单位=额定3A的百分比；0x19 单位 x100mA）──
+    # 刻度定案 2026-07-31: 经理示波器实测相电流峰峰 6A(=幅值3A, 寄存器95)，
+    # 官方上位机换算(63=2A/95=3A)正确；此前 x10mA 解读与钳表 850mA 结论作废。
+    # 旁证自洽: 电源入口 24W ÷ (3A)² ≈ 2.7Ω 为典型低阻 42 电机绕组阻值。
+    # 上限 95 为固件硬限制(写96拒 err=3)=95%额定，属正常安全余量设计。
+    # 电机绕组额定 1.2A(用户 datasheet)，出厂值 运行51≈1.6A/加速63≈2A。
     # 注: 0x16/0x19 写入需先停机(否则 err=6 slave busy)，0x17/0x18 可随时写。
     RegisterDef(
         0x0015, "减速电流", RegisterType.HOLDING, DataType.UINT16, 1,
-        unit="x10mA", min_val=0, max_val=95, default_val=0,
+        unit="≈31.6mA", min_val=0, max_val=95, default_val=0,
         description="SDM42 驱动器无减速电流, 不配置(2026-07-27 经理指示); 固件对写入静默丢弃回读恒0(2026-07-25 两台实测); 本机出厂值0",
     ),
     RegisterDef(
         0x0016, "怠机电流", RegisterType.HOLDING, DataType.UINT16, 1,
-        unit="x10mA", min_val=0, max_val=95, default_val=15,
-        description="电机空闲时的保持电流; 越大发热越大; 写入需先停机; 经理定值21=0.69A(按经理给定换算, 2026-07-27); 本机出厂值15",
+        unit="≈31.6mA", min_val=0, max_val=95, default_val=15,
+        description="电机空闲时的保持电流; 越大发热越大; 写入需先停机; 经理定值21≈0.66A(2026-07-27, 电机额定内可长期夹持); 本机出厂值15",
     ),
     RegisterDef(
         0x0017, "加速电流", RegisterType.HOLDING, DataType.UINT16, 1,
-        unit="x10mA", min_val=0, max_val=95, default_val=63,
-        description="实际电流=值x10mA; 加速/堵转阶段的最大电流; 驱动器上限95(0.95A); 本机出厂值63(0.63A)",
+        unit="≈31.6mA", min_val=0, max_val=95, default_val=63,
+        description="加速/堵转阶段的最大电流; ≈31.6mA/单位(95≈3A, 2026-07-31 刻度定案); 本机出厂值63(≈2A)",
     ),
     RegisterDef(
         0x0018, "运行电流", RegisterType.HOLDING, DataType.UINT16, 1,
-        unit="x10mA", min_val=0, max_val=95, default_val=51,
-        description="实际电流=值x10mA; 正常运行时的最大电流; 驱动器上限95(0.95A), 电机额定1.2A给不满; 本机出厂值51(0.51A)",
+        unit="≈31.6mA", min_val=0, max_val=95, default_val=51,
+        description="正常运行时的最大电流; ≈31.6mA/单位(95≈3A); 当前95对1.2A电机为超流驱动(带载不丢步刚需, 经理定值维持, 压测盯温升); 本机出厂值51(≈1.6A)",
     ),
     RegisterDef(
         0x0019, "过载电流", RegisterType.HOLDING, DataType.UINT16, 1,
