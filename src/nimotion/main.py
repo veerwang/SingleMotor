@@ -17,7 +17,7 @@ def main() -> None:
     apply_theme(app)
 
     window = MainWindow()
-    window.setWindowTitle("NiMotion 步进电机调试工具 v0.1")
+    window.setWindowTitle("NiMotion 步进电机调试工具 v0.2")
     window.resize(1280, 800)
     window.show()
 
