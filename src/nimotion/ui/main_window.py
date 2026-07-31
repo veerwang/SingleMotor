@@ -14,6 +14,7 @@ from PyQt5.QtWidgets import (
 
 from ..communication.serial_port import SerialConfig
 from ..communication.worker import CommWorker
+from ..models.app_config import load_direction_inverted
 from ..services.motor_service import MotorService
 from .connection_bar import ConnectionBar
 from .integration_test_tab import IntegrationTestTab
@@ -31,6 +32,7 @@ class MainWindow(QMainWindow):
         # 核心组件
         self._worker = CommWorker(self)
         self._motor_service = MotorService(self._worker)
+        self._motor_service.direction_inverted = load_direction_inverted()
 
         self._init_ui()
         self._connect_signals()

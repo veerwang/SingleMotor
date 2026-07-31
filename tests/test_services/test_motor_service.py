@@ -408,3 +408,93 @@ class TestOnResponse:
         # 不应发出信号
         with qtbot.assertNotEmitted(service.status_updated, wait=100):
             service._on_response(resp)
+
+
+class TestDirectionInverted:
+    """电机方向反转（direction_inverted）：服务层边界统一翻转"""
+
+    def test_default_off(self, service):
+        assert service.direction_inverted is False
+
+    def test_move_relative_inverted(self, service, mock_worker):
+        """反转开启: 逻辑正向相对运动应写 0x0052=0(物理反转)，幅值不变"""
+        service.direction_inverted = True
+        with patch.object(mock_worker, "send_modbus") as mock_send:
+            service.move_relative(1000)
+            req_dir = mock_send.call_args_list[2][0][0]
+            assert req_dir.address == 0x0052
+            assert req_dir.values == [0]
+            req_mag = mock_send.call_args_list[3][0][0]
+            assert req_mag.address == 0x0053
+            assert req_mag.values == list(ModbusRTU.split_32bit(1000))
+
+    def test_move_relative_negative_inverted(self, service, mock_worker):
+        """反转开启: 逻辑负向相对运动应写 0x0052=1(物理正转)"""
+        service.direction_inverted = True
+        with patch.object(mock_worker, "send_modbus") as mock_send:
+            service.move_relative(-500)
+            req_dir = mock_send.call_args_list[2][0][0]
+            assert req_dir.values == [1]
+            req_mag = mock_send.call_args_list[3][0][0]
+            assert req_mag.values == list(ModbusRTU.split_32bit(500))
+
+    def test_move_absolute_inverted(self, service, mock_worker):
+        """反转开启: 绝对目标位置取反写入 0x0053"""
+        service.direction_inverted = True
+        with patch.object(mock_worker, "send_modbus") as mock_send:
+            service.move_absolute(5000)
+            req_target = mock_send.call_args_list[2][0][0]
+            assert req_target.address == 0x0053
+            assert req_target.values == list(ModbusRTU.split_32bit(-5000))
+
+    def test_set_speed_inverted(self, service, mock_worker):
+        """反转开启: 速度模式方向位取反"""
+        service.direction_inverted = True
+        with patch.object(mock_worker, "send_modbus") as mock_send:
+            service.set_speed(500, 1)
+            req_dir = mock_send.call_args_list[2][0][0]
+            assert req_dir.address == 0x0052
+            assert req_dir.values == [0]
+
+    def test_status_readback_inverted(self, service, qtbot):
+        """反转开启: 位置读数取负、方向读数取反(逻辑坐标系)"""
+        service.direction_inverted = True
+        vals = [24, 0, 0, 0, 0, 0, 0, 2, 0x0037, 1, 0, 1000, 0, 5000, 0, 0]
+        resp = ModbusResponse(
+            slave_id=1,
+            function_code=FunctionCode.READ_INPUT,
+            data=b"",
+            values=vals,
+        )
+        with qtbot.waitSignal(service.status_updated, timeout=1000) as blocker:
+            service._on_response(resp)
+        status = blocker.args[0]
+        assert status.position == -1000
+        assert status.direction == 0
+
+    def test_runtime_params_expected_flipped(self, service):
+        """反转开启: 校准状态机对 0x0052 的期望值应为 0"""
+        normal = {a: v for a, v, _, _ in service._runtime_params()}
+        assert normal[0x0052] == 1
+        service.direction_inverted = True
+        flipped = {a: v for a, v, _, _ in service._runtime_params()}
+        assert flipped[0x0052] == 0
+
+    def test_roundtrip_symmetry(self, service, mock_worker, qtbot):
+        """反转开启: 指令与读数翻转对称——逻辑+N 移动后读数也应为逻辑+N"""
+        service.direction_inverted = True
+        with patch.object(mock_worker, "send_modbus"):
+            service.move_absolute(2200)
+        # 物理侧位置为 -2200，回读应翻回逻辑 +2200
+        neg = (-2200) & 0xFFFFFFFF
+        vals = [24, 0, 0, 0, 0, 0, 0, 1, 0x0037, 0,
+                neg >> 16, neg & 0xFFFF, 0, 0, 0, 0]
+        resp = ModbusResponse(
+            slave_id=1,
+            function_code=FunctionCode.READ_INPUT,
+            data=b"",
+            values=vals,
+        )
+        with qtbot.waitSignal(service.status_updated, timeout=1000) as blocker:
+            service._on_response(resp)
+        assert blocker.args[0].position == 2200

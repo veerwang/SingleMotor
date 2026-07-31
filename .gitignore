@@ -18,3 +18,4 @@ venv/
 turret_calibration.json
 turret_offsets.json
 turret_backlash.json
+motor_config.json

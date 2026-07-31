@@ -66,6 +66,7 @@ class MotorService(QObject):
 
     # 开机校准但不存 EEPROM 的运行时参数：每次连接写入 RAM。
     # 0x0052 会随运行动态改写(相对运动按目标符号写)，且手册规定不可保存。
+    # 期望值随 direction_inverted 变化，实际使用 _runtime_params() 实例视图。
     RUNTIME_PARAMS: list[tuple[int, int, str, bool]] = [
         (0x0052, 1, "运动方向(正转)", False),  # 0=反转 1=正转，立即生效
     ]
@@ -75,6 +76,9 @@ class MotorService(QObject):
         self._worker = worker
         self._slave_id = slave_id
         self._last_state = MotorState.UNKNOWN
+        # 方向反转(适配相序相反的电机型号)：在服务层边界统一翻转所有运动
+        # 指令和位置/方向读数，上层(回零/测距/转盘)一律工作在逻辑坐标系。
+        self._direction_inverted = False
         self._worker.response_received.connect(self._on_response)
 
         # 回零配置状态机
@@ -117,6 +121,25 @@ class MotorService(QObject):
     @slave_id.setter
     def slave_id(self, value: int) -> None:
         self._slave_id = value
+
+    @property
+    def direction_inverted(self) -> bool:
+        """电机方向是否反转（不同型号电机相序相反时开启）。"""
+        return self._direction_inverted
+
+    @direction_inverted.setter
+    def direction_inverted(self, value: bool) -> None:
+        self._direction_inverted = bool(value)
+
+    def _runtime_params(self) -> list[tuple[int, int, str, bool]]:
+        """RUNTIME_PARAMS 实例视图：方向反转时 0x0052 期望值改为 0。"""
+        if not self._direction_inverted:
+            return self.RUNTIME_PARAMS
+        return [
+            (addr, 0, "运动方向(反转)", is_32bit) if addr == 0x0052
+            else (addr, val, name, is_32bit)
+            for addr, val, name, is_32bit in self.RUNTIME_PARAMS
+        ]
 
     # -- 状态查询 --
 
@@ -183,7 +206,10 @@ class MotorService(QObject):
         本驱动器相对模式的方向由 0x0052(0=反转/1=正转)决定，0x0053 只作
         正的步长幅值——写负数会被当成非法幅值而不动。因此按 position 的
         正负设置方向寄存器（正=正转/位置增大），幅值取绝对值。
+        direction_inverted 开启时步数取反，逻辑正方向对应物理反转。
         """
+        if self._direction_inverted:
+            position = -position
         direction = 1 if position >= 0 else 0
         self._write_control_word(0x0000)  # 先停机
         self._write_single(0x0039, int(RunMode.POSITION))  # 设置位置模式
@@ -195,7 +221,9 @@ class MotorService(QObject):
         self._write_control_word(0x005F)  # 触发新位置
 
     def move_absolute(self, position: int) -> None:
-        """绝对位置运动"""
+        """绝对位置运动（direction_inverted 开启时目标位置取反）"""
+        if self._direction_inverted:
+            position = -position
         self._write_control_word(0x0000)  # 先停机
         self._write_single(0x0039, int(RunMode.POSITION))  # 设置位置模式
         self._write_32bit(0x0053, position, signed=True)
@@ -205,7 +233,9 @@ class MotorService(QObject):
         self._write_control_word(0x001F)  # 触发新位置
 
     def set_speed(self, speed: int, direction: int) -> None:
-        """速度模式运行"""
+        """速度模式运行（direction_inverted 开启时方向位取反）"""
+        if self._direction_inverted:
+            direction ^= 1
         self._write_control_word(0x0000)  # 先停机
         self._write_single(0x0039, int(RunMode.SPEED))  # 设置速度模式
         self._write_single(0x0052, direction)
@@ -287,7 +317,7 @@ class MotorService(QObject):
 
         # 运行时参数：不一致仅写入 RAM，不固化
         runtime_diffs: list[str] = []
-        for addr, expected, name, is_32bit in self.RUNTIME_PARAMS:
+        for addr, expected, name, is_32bit in self._runtime_params():
             current = self._init_read_values[addr]
             if current != expected:
                 if is_32bit:
@@ -477,6 +507,10 @@ class MotorService(QObject):
         status.direction = vals[9]
         # vals[10], vals[11] = 0x21~0x22 (位置, 32位)
         status.position = ModbusRTU.combine_32bit(vals[10], vals[11], signed=True)
+        # 方向反转时翻回逻辑坐标系，与运动指令的翻转对称
+        if self._direction_inverted:
+            status.direction = vals[9] ^ 1
+            status.position = -status.position
         # vals[12], vals[13] = 0x23~0x24 (速度, 32位, 值=实际x10)
         raw_speed = ModbusRTU.combine_32bit(vals[12], vals[13])
         status.speed = raw_speed // 10

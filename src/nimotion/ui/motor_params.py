@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from PyQt5.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFormLayout,
     QGroupBox,
@@ -16,6 +17,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from ..models.app_config import save_direction_inverted
 from ..models.registers import HOLDING_REGISTERS, get_register
 from ..models.types import DataType, RegisterType
 from ..services.motor_service import MotorService
@@ -123,6 +125,24 @@ class MotorParamsPanel(QWidget):
         scroll_content = QWidget()
         scroll_layout = QVBoxLayout(scroll_content)
 
+        # 软件选项：本机配置，不写驱动器寄存器
+        sw_group = QGroupBox("软件选项（本机）")
+        sw_form = QFormLayout()
+        self._invert_check = QCheckBox("电机方向反转")
+        self._invert_check.setChecked(self._motor.direction_inverted)
+        self._invert_check.toggled.connect(self._on_invert_toggled)
+        sw_form.addRow(self._invert_check)
+        sw_hint = QLabel(
+            "适配相序相反的电机型号: 所有运动指令与位置/方向读数在软件侧统一取反，"
+            "回零/测距/转盘逻辑不受影响。保存于本机 motor_config.json；"
+            "切换后请重新回零，反转前建立的孔位标定需重新标定。"
+        )
+        sw_hint.setStyleSheet("color: #888; font-size: 10px;")
+        sw_hint.setWordWrap(True)
+        sw_form.addRow(sw_hint)
+        sw_group.setLayout(sw_form)
+        scroll_layout.addWidget(sw_group)
+
         for group_name, addresses, readonly in PARAM_GROUPS:
             group = QGroupBox(group_name)
             form = QFormLayout()
@@ -193,6 +213,16 @@ class MotorParamsPanel(QWidget):
         btn_row.addWidget(restore_btn)
 
         layout.addLayout(btn_row)
+
+    def _on_invert_toggled(self, checked: bool) -> None:
+        """方向反转切换：立即生效并持久化到本机配置文件"""
+        self._motor.direction_inverted = checked
+        save_direction_inverted(checked)
+        self._set_status(
+            f"电机方向反转已{'开启' if checked else '关闭'}（已保存到本机）。"
+            "请重新回零；如孔位标定建立于切换前，需重新标定。",
+            "#E65100",
+        )
 
     def _on_read_all(self) -> None:
         """读取所有参数"""
