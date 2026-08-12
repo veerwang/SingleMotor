@@ -17,7 +17,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from ..models.app_config import save_direction_inverted
+from ..models.app_config import load_di_invert, save_di_invert, save_direction_inverted
 from ..models.registers import HOLDING_REGISTERS, get_register
 from ..models.types import DataType, RegisterType
 from ..services.motor_service import MotorService
@@ -132,10 +132,15 @@ class MotorParamsPanel(QWidget):
         self._invert_check.setChecked(self._motor.direction_inverted)
         self._invert_check.toggled.connect(self._on_invert_toggled)
         sw_form.addRow(self._invert_check)
+        self._di_invert_check = QCheckBox("原点开关极性取反")
+        self._di_invert_check.setChecked(load_di_invert())
+        self._di_invert_check.toggled.connect(self._on_di_invert_toggled)
+        sw_form.addRow(self._di_invert_check)
         sw_hint = QLabel(
-            "适配相序相反的电机型号: 所有运动指令与位置/方向读数在软件侧统一取反，"
-            "回零/测距/转盘逻辑不受影响。保存于本机 motor_config.json；"
-            "切换后请重新回零，反转前建立的孔位标定需重新标定。"
+            "电机方向反转: 适配相序相反的电机型号(所有运动指令与位置/方向读数软件侧"
+            "统一取反)；原点开关极性取反: 适配感应逻辑相反的物镜转换器(回零/测距时"
+            "DI1 触发判定取反)。均保存于本机 motor_config.json；切换后请重新回零，"
+            "需重新标定孔位。"
         )
         sw_hint.setStyleSheet("color: #888; font-size: 10px;")
         sw_hint.setWordWrap(True)
@@ -221,6 +226,16 @@ class MotorParamsPanel(QWidget):
         self._set_status(
             f"电机方向反转已{'开启' if checked else '关闭'}（已保存到本机）。"
             "请重新回零；如孔位标定建立于切换前，需重新标定。",
+            "#E65100",
+        )
+
+    def _on_di_invert_toggled(self, checked: bool) -> None:
+        """原点开关极性取反切换：立即生效并持久化到本机配置文件"""
+        self._motor.di_invert = checked
+        save_di_invert(checked)
+        self._set_status(
+            f"原点开关极性取反已{'开启' if checked else '关闭'}（已保存到本机）。"
+            "回零/测距将在下次启动时使用新极性。",
             "#E65100",
         )
 

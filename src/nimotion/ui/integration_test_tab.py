@@ -22,6 +22,7 @@ from ..models.turret import (
     load_calibration,
     microstep_from_register,
 )
+from ..models.app_config import load_di_invert
 from ..models.types import MotorStatus
 from ..services.home_search import HomeSearch
 from ..services.motor_service import MotorService
@@ -93,8 +94,10 @@ class IntegrationTestTab(QWidget):
         self._pause_timer.setSingleShot(True)
         self._pause_timer.timeout.connect(self._on_pause_done)
 
-        # 软件回零控制器(与转盘页/测距同协议同参数)
-        self._homer = HomeSearch(self._motor, di_bit=0, parent=self)
+        # 软件回零控制器(与转盘页/测距同协议同参数；原点开关极性取反按本机配置)
+        self._homer = HomeSearch(
+            self._motor, di_bit=0, invert_di=load_di_invert(), parent=self
+        )
         self._homer.homed.connect(self._on_homing_done)
         self._homer.failed.connect(self._on_homing_failed)
 

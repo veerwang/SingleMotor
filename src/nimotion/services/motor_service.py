@@ -84,6 +84,9 @@ class MotorService(QObject):
         # 方向反转(适配相序相反的电机型号)：在服务层边界统一翻转所有运动
         # 指令和位置/方向读数，上层(回零/测距/转盘)一律工作在逻辑坐标系。
         self._direction_inverted = False
+        # 原点开关(DI1)极性取反(适配感应逻辑相反的物镜转换器)：
+        # 默认旧逻辑=False(不取反)。由 GUI 设置项读写本机配置。
+        self._di_invert = False
         self._worker.response_received.connect(self._on_response)
 
         # 回零配置状态机
@@ -135,6 +138,15 @@ class MotorService(QObject):
     @direction_inverted.setter
     def direction_inverted(self, value: bool) -> None:
         self._direction_inverted = bool(value)
+
+    @property
+    def di_invert(self) -> bool:
+        """原点开关(DI1)极性取反(适配感应逻辑相反的物镜转换器)。"""
+        return self._di_invert
+
+    @di_invert.setter
+    def di_invert(self, value: bool) -> None:
+        self._di_invert = bool(value)
 
     def _runtime_params(self) -> list[tuple[int, int, str, bool]]:
         """RUNTIME_PARAMS 实例视图：方向反转时 0x0052 期望值改为 0。"""

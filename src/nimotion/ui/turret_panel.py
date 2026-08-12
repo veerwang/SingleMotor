@@ -28,6 +28,7 @@ from ..models.turret import (
     save_backlash_deg,
     save_calibration,
 )
+from ..models.app_config import load_di_invert
 from ..models.types import MotorStatus
 from ..services.home_search import HomeSearch
 from ..services.motor_service import MotorService
@@ -92,8 +93,10 @@ class TurretPanel(QWidget):
         self._settle_timer.setSingleShot(True)
         self._settle_timer.timeout.connect(self._on_settle_done)
 
-        # 软件搜索测距控制器
-        self._search = HomeSearch(self._motor, di_bit=0, parent=self)
+        # 软件搜索测距控制器(原点开关极性取反按本机配置)
+        self._search = HomeSearch(
+            self._motor, di_bit=0, invert_di=load_di_invert(), parent=self
+        )
         self._search.finished.connect(self._on_search_finished)
         self._search.homed.connect(self._on_homing_done)
         self._search.failed.connect(self._on_search_failed)

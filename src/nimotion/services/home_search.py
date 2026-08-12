@@ -32,6 +32,7 @@ from __future__ import annotations
 
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 
+from ..models.app_config import load_di_invert
 from ..models.types import MotorStatus
 from .motor_service import MotorService
 
@@ -63,10 +64,15 @@ class HomeSearch(QObject):
     FINE_ACCEL = 50              # 细搜阶段临时加速度(Step/s², 2026-07-28 经理定值 990→50)
     PREPARE_TIMEOUT_MS = 3000    # 读取原最大速度/加速度超时
 
-    def __init__(self, motor: MotorService, di_bit: int = 0, parent=None) -> None:
+    def __init__(
+        self, motor: MotorService, di_bit: int = 0, invert_di: bool = False, parent=None
+    ) -> None:
         super().__init__(parent)
         self._motor = motor
         self._di_bit = di_bit
+        # 原点开关(DI1)极性取反：默认 False=旧逻辑(高电平触发)。
+        # 新物镜转换器感应逻辑可能相反，由 GUI 设置项读写本机配置传入。
+        self._invert_di = invert_di
         # idle/prepare/sweep/stopping/backoff/fine/returning
         self._phase = "idle"
         self._settling = False
@@ -108,6 +114,7 @@ class HomeSearch(QObject):
 
         pulses_per_sec 用于按步长动态估算点动整定时长(建议传 最大速度×细分数)。
         """
+        self._invert_di = load_di_invert()  # 每次启动读取最新本机配置
         self._begin(pulses_per_sec, return_to_start, "measure")
 
     def start_homing(self, pulses_per_sec: int = 480) -> None:
@@ -115,6 +122,7 @@ class HomeSearch(QObject):
 
         与测距前 3 步协议/参数完全一致(经理要求)，完成发 homed 信号。
         """
+        self._invert_di = load_di_invert()  # 每次启动读取最新本机配置
         self._begin(pulses_per_sec, False, "home")
 
     def _begin(self, pulses_per_sec: int, return_to_start: bool, mode: str) -> None:
@@ -204,6 +212,8 @@ class HomeSearch(QObject):
             return
 
         triggered = bool(status.di_status & (1 << self._di_bit))
+        if self._invert_di:
+            triggered = not triggered
         pos = status.position
 
         if self._phase == "sweep":
