@@ -55,7 +55,9 @@ class HomeSearch(QObject):
     BACKOFF = 60                 # 触发后回退步长(释放开关)。停点最深在边沿下方
                                  # ~40脉冲(轮询量化20+停车距离20)，60一次可出窗，
                                  # 循环兜底；取小减少细搜空走步数(2026-07-28 经理定值 90→60)
-    MAX_TRAVEL = 10000           # 搜索行程上限(>转盘一圈 8800)
+    MAX_TRAVEL = 10000           # 默认搜索行程上限(>默认齿轮比下转盘一圈 8800)；
+                                 # 齿轮比可配置后调用方按实际一圈脉冲经 start()/
+                                 # start_homing() 的 max_travel 参数传入覆盖
     FINE_TRAVEL_LIMIT = 200      # 细搜行程上限(回退60+窗口50+裕量)，防误触发后无限细搜
     SETTLE_MARGIN_MS = 300       # 单步整定裕量
     STOP_SETTLE_MS = 400         # sweep 触发停机后的整定时间
@@ -83,6 +85,7 @@ class HomeSearch(QObject):
         self._return_to_start = True
         self._mode = "measure"   # measure=测距 / home=软件回零
         self._pps = 480
+        self._max_travel = self.MAX_TRAVEL  # 实际行程上限，_begin 时可被覆盖
         self._orig_speed: int | None = None  # 搜索前的最大速度，结束后恢复
         self._orig_accel: int | None = None  # 搜索前的加速度，细搜降 200 后恢复
         self._accel_lowered = False          # 细搜临时加速度是否已写入
@@ -109,26 +112,43 @@ class HomeSearch(QObject):
         if self._phase != "idle":
             self._teardown()
 
-    def start(self, pulses_per_sec: int = 480, return_to_start: bool = True) -> None:
+    def start(
+        self,
+        pulses_per_sec: int = 480,
+        return_to_start: bool = True,
+        max_travel: int | None = None,
+    ) -> None:
         """开始测量：清 0 → sweep → 回退 → 细搜 → (可选)返回起点。
 
         pulses_per_sec 用于按步长动态估算点动整定时长(建议传 最大速度×细分数)。
+        max_travel 覆盖搜索行程上限(建议传 转盘一圈脉冲+裕量)，None 用默认。
         """
         self._invert_di = load_di_invert()  # 每次启动读取最新本机配置
-        self._begin(pulses_per_sec, return_to_start, "measure")
+        self._begin(pulses_per_sec, return_to_start, "measure", max_travel)
 
-    def start_homing(self, pulses_per_sec: int = 480) -> None:
+    def start_homing(
+        self, pulses_per_sec: int = 480, max_travel: int | None = None
+    ) -> None:
         """软件回零：sweep → 回退 → 细搜到边沿 → 就地设零 → 夹持。
 
         与测距前 3 步协议/参数完全一致(经理要求)，完成发 homed 信号。
         """
         self._invert_di = load_di_invert()  # 每次启动读取最新本机配置
-        self._begin(pulses_per_sec, False, "home")
+        self._begin(pulses_per_sec, False, "home", max_travel)
 
-    def _begin(self, pulses_per_sec: int, return_to_start: bool, mode: str) -> None:
+    def _begin(
+        self,
+        pulses_per_sec: int,
+        return_to_start: bool,
+        mode: str,
+        max_travel: int | None = None,
+    ) -> None:
         if self._phase != "idle":
             return
         self._mode = mode
+        self._max_travel = (
+            int(max_travel) if max_travel and max_travel > 0 else self.MAX_TRAVEL
+        )
         self._pps = max(int(pulses_per_sec), 1)
         self._return_to_start = return_to_start
         self._measured = 0
@@ -233,7 +253,7 @@ class HomeSearch(QObject):
                 self._motor.stop()  # 减速停机(0x0007)
                 self._phase = "stopping"
                 self._settle_timer.start(self.STOP_SETTLE_MS)
-            elif abs(pos) > self.MAX_TRAVEL:
+            elif abs(pos) > self._max_travel:
                 self._poll_timer.stop()
                 self._motor.stop()
                 self._fail("行程内未找到感应点(方向/接线?)")

@@ -18,11 +18,12 @@ from PyQt5.QtWidgets import (
 from ..models.turret import (
     MICROSTEP_REG_ADDR,
     TurretPosition,
+    calculate_pulses_per_position,
     effective_position_pulses,
     load_calibration,
     microstep_from_register,
 )
-from ..models.app_config import load_di_invert
+from ..models.app_config import load_di_invert, load_gear_ratio
 from ..models.types import MotorStatus
 from ..services.home_search import HomeSearch
 from ..services.motor_service import MotorService
@@ -191,7 +192,7 @@ class IntegrationTestTab(QWidget):
             return
         # 采用与转盘页一致的标定绝对脉冲（未标定回退理论值）
         self._position_pulses = effective_position_pulses(
-            self._microstep, load_calibration()
+            self._microstep, load_calibration(), load_gear_ratio()
         )
 
     # -- 开始 / 停止 --
@@ -215,7 +216,7 @@ class IntegrationTestTab(QWidget):
         # 重新按最新标定值刷新孔位目标（用户可能刚在转盘页标定过）
         if self._microstep is not None:
             self._position_pulses = effective_position_pulses(
-                self._microstep, load_calibration()
+                self._microstep, load_calibration(), load_gear_ratio()
             )
         self._target_loops = count
         self._loop_done = 0
@@ -265,8 +266,12 @@ class IntegrationTestTab(QWidget):
             self._phase = "homing"
             self._step_label.setText("步骤: 回零中(软件回零)...")
             self._step_timer.start(self._HOME_TIMEOUT_MS)
+            one_rev = 4 * calculate_pulses_per_position(
+                self._microstep, load_gear_ratio()
+            )
             self._homer.start_homing(
-                pulses_per_sec=HomeSearch.SEARCH_SPEED * self._microstep
+                pulses_per_sec=HomeSearch.SEARCH_SPEED * self._microstep,
+                max_travel=one_rev + 1200,
             )
         else:
             assert self._position_pulses is not None

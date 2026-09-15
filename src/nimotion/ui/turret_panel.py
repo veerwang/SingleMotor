@@ -28,7 +28,7 @@ from ..models.turret import (
     save_backlash_deg,
     save_calibration,
 )
-from ..models.app_config import load_di_invert
+from ..models.app_config import load_di_invert, load_gear_ratio
 from ..models.types import MotorStatus
 from ..services.home_search import HomeSearch
 from ..services.motor_service import MotorService
@@ -283,7 +283,9 @@ class TurretPanel(QWidget):
         self._status_label.setText("正在归零(软件回零)...")
         self._status_label.setStyleSheet("color: #FFA726;")
         pps = HomeSearch.SEARCH_SPEED * self._microstep
-        self._search.start_homing(pulses_per_sec=pps)
+        self._search.start_homing(
+            pulses_per_sec=pps, max_travel=self._search_max_travel()
+        )
         self._moving_timer.start(self._HOME_TIMEOUT_MS)
 
     def _on_release(self) -> None:
@@ -328,7 +330,7 @@ class TurretPanel(QWidget):
         if self._microstep is None:
             return
         base = self._pos_spins[TurretPosition.POS_1].value()
-        per_hole = calculate_pulses_per_position(self._microstep)
+        per_hole = calculate_pulses_per_position(self._microstep, load_gear_ratio())
         targets = {
             TurretPosition.POS_2: base + per_hole,
             TurretPosition.POS_3: base + 2 * per_hole,
@@ -353,12 +355,22 @@ class TurretPanel(QWidget):
         self._update_controls()
         # 搜索期间 HomeSearch 会临时把最大速度降为 SEARCH_SPEED，按其估算整定时长
         pps = HomeSearch.SEARCH_SPEED * self._microstep
-        self._search.start(pulses_per_sec=pps, return_to_start=True)
+        self._search.start(
+            pulses_per_sec=pps,
+            return_to_start=True,
+            max_travel=self._search_max_travel(),
+        )
 
     def _on_search_finished(self, distance: int) -> None:
         self._searching = False
-        deg = distance * 360 / 8800
-        self._search_result.setText(f"距离: {distance} pulse  (≈{deg:.2f}°)")
+        if self._microstep is not None:
+            one_rev = 4 * calculate_pulses_per_position(
+                self._microstep, load_gear_ratio()
+            )
+            deg_text = f"  (≈{distance * 360 / one_rev:.2f}°)"
+        else:
+            deg_text = ""
+        self._search_result.setText(f"距离: {distance} pulse{deg_text}")
         self._status_label.setText("测距完成，已返回起点")
         self._status_label.setStyleSheet("color: #66BB6A;")
         self._update_controls()
@@ -389,7 +401,9 @@ class TurretPanel(QWidget):
         """当前补偿角度换算的脉冲数(细分未就绪返回 0)。"""
         if self._microstep is None:
             return 0
-        return backlash_deg_to_pulses(self._backlash_spin.value(), self._microstep)
+        return backlash_deg_to_pulses(
+            self._backlash_spin.value(), self._microstep, load_gear_ratio()
+        )
 
     def _update_backlash_label(self) -> None:
         p = self._backlash_pulses()
@@ -430,7 +444,9 @@ class TurretPanel(QWidget):
             return
         self._microstep = microstep
         # 用标定值（缺失回退理论值）初始化各孔位目标 spinbox
-        effective = effective_position_pulses(microstep, self._calibration)
+        effective = effective_position_pulses(
+            microstep, self._calibration, load_gear_ratio()
+        )
         for pos in _SLOTS:
             spin = self._pos_spins[pos]
             spin.blockSignals(True)
@@ -557,6 +573,13 @@ class TurretPanel(QWidget):
         self._status_label.setStyleSheet("color: #F44336;")
 
     # -- 辅助方法 --
+
+    def _search_max_travel(self) -> int | None:
+        """按当前齿轮比估算搜索行程上限：转盘一圈脉冲+裕量(默认比值下=10000)。"""
+        if self._microstep is None:
+            return None
+        one_rev = 4 * calculate_pulses_per_position(self._microstep, load_gear_ratio())
+        return one_rev + 1200
 
     def _effective_positions(self) -> dict[TurretPosition, int] | None:
         """当前各孔位采用的绝对脉冲（即 spinbox 值），细分未就绪时返回 None。"""

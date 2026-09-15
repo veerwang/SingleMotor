@@ -2,11 +2,17 @@
 
 import json
 
+import pytest
+
 from nimotion.models.app_config import (
+    DEFAULT_GEAR_TEETH,
     load_di_invert,
     load_direction_inverted,
+    load_gear_ratio,
+    load_gear_teeth,
     save_di_invert,
     save_direction_inverted,
+    save_gear_teeth,
 )
 
 
@@ -60,3 +66,62 @@ class TestDiInvertConfig:
         data = json.loads(path.read_text(encoding="utf-8"))
         assert data["direction_inverted"] is True
         assert data["di_invert"] is True
+
+
+class TestGearTeethConfig:
+    def test_default_teeth(self):
+        assert DEFAULT_GEAR_TEETH == (132, 48)
+
+    def test_missing_file_defaults(self, tmp_path):
+        assert load_gear_teeth(tmp_path / "none.json") == (132, 48)
+        assert load_gear_ratio(tmp_path / "none.json") == 2.75
+
+    def test_corrupt_file_defaults(self, tmp_path):
+        path = tmp_path / "motor_config.json"
+        path.write_text("{broken", encoding="utf-8")
+        assert load_gear_teeth(path) == (132, 48)
+
+    def test_save_load_roundtrip(self, tmp_path):
+        path = tmp_path / "motor_config.json"
+        save_gear_teeth(100, 40, path)
+        assert load_gear_teeth(path) == (100, 40)
+        assert load_gear_ratio(path) == 2.5
+
+    def test_invalid_stored_values_default(self, tmp_path):
+        path = tmp_path / "motor_config.json"
+        path.write_text(
+            json.dumps({"gear_teeth_turret": 0, "gear_teeth_motor": 48}),
+            encoding="utf-8",
+        )
+        assert load_gear_teeth(path) == (132, 48)
+        path.write_text(
+            json.dumps({"gear_teeth_turret": "oops", "gear_teeth_motor": 48}),
+            encoding="utf-8",
+        )
+        assert load_gear_teeth(path) == (132, 48)
+        path.write_text(
+            json.dumps({"gear_teeth_turret": 132, "gear_teeth_motor": -5}),
+            encoding="utf-8",
+        )
+        assert load_gear_teeth(path) == (132, 48)
+
+    def test_partial_keys_fall_back_per_key(self, tmp_path):
+        path = tmp_path / "motor_config.json"
+        path.write_text(json.dumps({"gear_teeth_turret": 120}), encoding="utf-8")
+        assert load_gear_teeth(path) == (120, 48)
+
+    def test_save_rejects_non_positive(self, tmp_path):
+        path = tmp_path / "motor_config.json"
+        with pytest.raises(ValueError):
+            save_gear_teeth(0, 48, path)
+        with pytest.raises(ValueError):
+            save_gear_teeth(132, -1, path)
+
+    def test_save_preserves_other_fields(self, tmp_path):
+        path = tmp_path / "motor_config.json"
+        path.write_text(json.dumps({"direction_inverted": True}), encoding="utf-8")
+        save_gear_teeth(110, 44, path)
+        data = json.loads(path.read_text(encoding="utf-8"))
+        assert data["direction_inverted"] is True
+        assert data["gear_teeth_turret"] == 110
+        assert data["gear_teeth_motor"] == 44

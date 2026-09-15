@@ -7,6 +7,9 @@ from enum import IntEnum
 from pathlib import Path
 
 # -- 齿轮机械参数 --
+# 默认齿轮比（转盘齿数132/电机齿数48 = 2.75）。实际值可在 GUI「软件选项(本机)」
+# 配置齿数并持久化到 motor_config.json，调用方经 app_config.load_gear_ratio()
+# 读取后传入下方各计算函数。
 GEAR_RATIO = 132 / 48  # 齿轮比 = 2.75
 MOTOR_STEPS_PER_REV = 200  # 电机每转步数
 
@@ -46,31 +49,37 @@ def microstep_from_register(reg_value: int) -> int:
     return 2**reg_value
 
 
-def calculate_pulses_per_position(microstep: int) -> int:
+def calculate_pulses_per_position(
+    microstep: int, gear_ratio: float = GEAR_RATIO
+) -> int:
     """计算每个物镜孔位(转盘旋转90°)对应的电机脉冲数。
 
-    转盘90° → 电机转 90° × GEAR_RATIO → 对应脉冲数
+    转盘90° → 电机转 90° × gear_ratio → 对应脉冲数
 
     Args:
         microstep: 实际细分数 (1, 2, 4, ..., 128)
+        gear_ratio: 齿轮比(转盘齿数/电机齿数)，默认 2.75
 
     Returns:
         每孔位脉冲数
     """
     motor_pulses_per_rev = MOTOR_STEPS_PER_REV * microstep
-    return int(motor_pulses_per_rev * GEAR_RATIO / 4)
+    return int(motor_pulses_per_rev * gear_ratio / 4)
 
 
-def calculate_position_pulses(microstep: int) -> dict[TurretPosition, int]:
+def calculate_position_pulses(
+    microstep: int, gear_ratio: float = GEAR_RATIO
+) -> dict[TurretPosition, int]:
     """计算位置→绝对脉冲数映射。
 
     Args:
         microstep: 实际细分数 (1, 2, 4, ..., 128)
+        gear_ratio: 齿轮比(转盘齿数/电机齿数)，默认 2.75
 
     Returns:
         各位置对应的绝对脉冲数字典
     """
-    ppp = calculate_pulses_per_position(microstep)
+    ppp = calculate_pulses_per_position(microstep, gear_ratio)
     return {
         TurretPosition.POS_1: 0,
         TurretPosition.POS_2: ppp,
@@ -149,25 +158,30 @@ def save_backlash_deg(deg: float, path: Path = BACKLASH_FILE) -> None:
     )
 
 
-def backlash_deg_to_pulses(deg: float, microstep: int) -> int:
+def backlash_deg_to_pulses(
+    deg: float, microstep: int, gear_ratio: float = GEAR_RATIO
+) -> int:
     """将转盘角度(°)换算为电机脉冲数(转盘整圈 = 4×每孔90°脉冲)。"""
-    turret_rev_pulses = 4 * calculate_pulses_per_position(microstep)
+    turret_rev_pulses = 4 * calculate_pulses_per_position(microstep, gear_ratio)
     return round(deg / 360.0 * turret_rev_pulses)
 
 
 def effective_position_pulses(
-    microstep: int, calibration: dict[TurretPosition, int] | None = None
+    microstep: int,
+    calibration: dict[TurretPosition, int] | None = None,
+    gear_ratio: float = GEAR_RATIO,
 ) -> dict[TurretPosition, int]:
     """计算实际用于移动的孔位绝对脉冲：已标定用标定值，否则用理论值。
 
     Args:
         microstep: 实际细分数
         calibration: 已标定孔位绝对脉冲（可为 None 或部分孔位）
+        gear_ratio: 齿轮比(转盘齿数/电机齿数)，默认 2.75
 
     Returns:
         各孔位最终采用的绝对脉冲数
     """
-    theoretical = calculate_position_pulses(microstep)
+    theoretical = calculate_position_pulses(microstep, gear_ratio)
     if not calibration:
         return theoretical
     return {pos: calibration.get(pos, theoretical[pos]) for pos in theoretical}

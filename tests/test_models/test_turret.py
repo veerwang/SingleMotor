@@ -79,6 +79,12 @@ class TestCalculatePulsesPerPosition:
         # 200 * 32 = 6400 pulses/rev; 6400 * 2.75 / 4 = 4400
         assert calculate_pulses_per_position(32) == 4400
 
+    def test_custom_gear_ratio(self):
+        # 200 * 16 = 3200 pulses/rev; 3200 * 2.5 / 4 = 2000
+        assert calculate_pulses_per_position(16, 2.5) == 2000
+        # 显式传默认比值与缺省一致
+        assert calculate_pulses_per_position(16, 132 / 48) == 2200
+
 
 class TestCalculatePositionPulses:
     def test_microstep_128(self):
@@ -186,6 +192,14 @@ class TestCalibration:
         assert effective_position_pulses(16, None) == calculate_position_pulses(16)
         assert effective_position_pulses(16, {}) == calculate_position_pulses(16)
 
+    def test_effective_custom_gear_ratio(self):
+        # 比值2.5: 理论每孔2000；已标定孔位不受比值影响
+        eff = effective_position_pulses(16, {TurretPosition.POS_1: 350}, 2.5)
+        assert eff[TurretPosition.POS_1] == 350
+        assert eff[TurretPosition.POS_2] == 2000
+        assert eff[TurretPosition.POS_3] == 4000
+        assert eff[TurretPosition.POS_4] == 6000
+
     def test_effective_partial_calibration_falls_back(self):
         # 只标定了 POS_1（回零点≠孔位1），其余回退理论值
         eff = effective_position_pulses(16, {TurretPosition.POS_1: 350})
@@ -208,6 +222,10 @@ class TestBacklash:
     def test_deg_to_pulses_scales_with_microstep(self):
         # ms32 整圈=17600, 1° ≈ 48.9 → 49
         assert backlash_deg_to_pulses(1.0, 32) == 49
+
+    def test_deg_to_pulses_custom_gear_ratio(self):
+        # ms16 比值2.5: 整圈=4×2000=8000, 1° ≈ 22.2 → 22
+        assert backlash_deg_to_pulses(1.0, 16, 2.5) == 22
 
     def test_load_missing_returns_zero(self, tmp_path):
         assert load_backlash_deg(tmp_path / "none.json") == 0.0
