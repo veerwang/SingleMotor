@@ -63,6 +63,8 @@ class FakeMotor(QObject):
         self.speed_writes: list[int] = []
         self.accel = 1000
         self.accel_writes: list[int] = []
+        self.min_speed = 16
+        self.min_speed_writes: list[int] = []
         self.respond_to_read = True
 
     def disable(self) -> None:
@@ -103,6 +105,8 @@ class FakeMotor(QObject):
             self.param_read.emit(addr, self.max_speed)
         elif addr == 0x005F:
             self.param_read.emit(addr, self.accel)
+        elif addr == 0x005D:
+            self.param_read.emit(addr, self.min_speed)
 
     def write_param_32bit(self, addr: int, value: int, signed: bool = False) -> None:
         if addr == 0x002C:
@@ -113,6 +117,9 @@ class FakeMotor(QObject):
         elif addr == 0x005F:
             self.accel = value
             self.accel_writes.append(value)
+        elif addr == 0x005D:
+            self.min_speed = value
+            self.min_speed_writes.append(value)
 
     def move_relative(self, step: int) -> None:
         self.jogs.append(step)
@@ -254,9 +261,10 @@ def test_speed_lowered_only_for_return_and_restored(app):
     assert fake2.speed_writes == []
 
 
-def test_creep_accel_lowered_and_restored(app):
-    """creep 前临时把加速度降为 CREEP_ACCEL，转 returning/结束后恢复原值；
-    sweep 阶段保持全局加速度不受影响。"""
+def test_creep_params_lowered_and_restored(app):
+    """creep 前临时把加速度降为 CREEP_ACCEL、最小速度(起停速度, 对目标速度
+    托底)降为 CREEP_SPEED，转 returning/结束后恢复原值；sweep 阶段两者均
+    保持全局值不受影响。"""
     fake = FakeMotor(sensor_pos=-500)
     hs = HomeSearch(fake)
     results = []
@@ -266,6 +274,8 @@ def test_creep_accel_lowered_and_restored(app):
     assert results == [548]
     assert fake.accel_writes == [HomeSearch.CREEP_ACCEL, 1000]  # creep 降、返回前恢复
     assert fake.accel == 1000
+    assert fake.min_speed_writes == [HomeSearch.CREEP_SPEED, 16]
+    assert fake.min_speed == 16
 
     # 回零模式同样降/恢复(teardown 兜底恢复)
     fake2 = FakeMotor(sensor_pos=-500)
@@ -277,6 +287,8 @@ def test_creep_accel_lowered_and_restored(app):
     assert homed == [True]
     assert fake2.accel_writes == [HomeSearch.CREEP_ACCEL, 1000]
     assert fake2.accel == 1000
+    assert fake2.min_speed_writes == [HomeSearch.CREEP_SPEED, 16]
+    assert fake2.min_speed == 16
 
 
 def test_fail_when_speed_read_times_out(app):
