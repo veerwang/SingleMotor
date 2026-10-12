@@ -32,8 +32,11 @@ homing 传感器严禁配成限位(转盘无限位，自研固件会报 FF0E 超
 
 点动仅剩测距的返回起点一步: 返回前临时把最大速度(0x005B)降为 SEARCH_SPEED
 (prepare 先读原值，结束/失败恢复)。0x005B 对速度模式同样钳速，故 sweep/creep
-期间不降速(SWEEP_SPEED 150 > SEARCH_SPEED 60 会被钳)。细搜取消后不再触碰
-加速度(0x005F)。
+期间不降速(SWEEP_SPEED 150 > SEARCH_SPEED 60 会被钳)。
+
+creep 前另临时把加速度(0x005F)降为 CREEP_ACCEL=100(2026-10-12 经理定值,
+sweep 阶段保持全局值 1000 不受影响)，转 returning(长行程不必低加速度)或
+结束时恢复原值；减速度(0x0061)不动，creep 触发停机仍按全局减速度急停。
 
 异常快失败: 任一状态帧带报警码(如欠压 3120)立即停机报错，不傻等看门狗。
 """
@@ -47,6 +50,7 @@ from ..models.types import MotorStatus
 from .motor_service import MotorService
 
 _MAX_SPEED_ADDR = 0x005B        # 最大速度(UINT32, Step/s)
+_ACCEL_ADDR = 0x005F            # 加速度(UINT32, Step/s²)
 
 
 class HomeSearch(QObject):
@@ -62,6 +66,8 @@ class HomeSearch(QObject):
                                  # 周期低于2×下限, 漏检重试兜底, 待真机复验)
     CREEP_SPEED = 10             # creep 反查速度(Step/s)，决定边沿定位精度(≈±4脉冲)
                                  # (2026-10-12 经理定值, 取代原细搜 FINE_STEP 逐步逼近)
+    CREEP_ACCEL = 100            # creep 阶段临时加速度(Step/s², 2026-10-12 经理定值,
+                                 # 起步斜坡 0.1s/8脉冲; 停机走减速度 0x0061 不受影响)
     POLL_MS = 20                 # sweep/creep 期间状态轮询周期(2026-07-28 经理定值 25→20)
     MAX_TRAVEL = 10000           # 默认搜索行程上限(>默认齿轮比下转盘一圈 8800)；
                                  # 齿轮比可配置后调用方按实际一圈脉冲经 start()/
@@ -72,7 +78,7 @@ class HomeSearch(QObject):
     STOP_SETTLE_MS = 400         # sweep/creep 触发停机后的整定时间
     OVERALL_TIMEOUT_MS = 120000  # 总看门狗
     SEARCH_SPEED = 60            # 返回起点时临时最大速度(Step/s)
-    PREPARE_TIMEOUT_MS = 3000    # 读取原最大速度超时
+    PREPARE_TIMEOUT_MS = 3000    # 读取原最大速度/加速度超时
 
     def __init__(
         self, motor: MotorService, di_bit: int = 0, invert_di: bool = False, parent=None
@@ -98,6 +104,9 @@ class HomeSearch(QObject):
         self._max_travel = self.MAX_TRAVEL  # 实际行程上限，_begin 时可被覆盖
         self._orig_speed: int | None = None  # 搜索前的最大速度，结束后恢复
         self._speed_lowered = False          # 0x005B 是否已降为 SEARCH_SPEED
+        self._orig_accel: int | None = None  # 搜索前的加速度，creep 降 100 后恢复
+        self._accel_lowered = False          # creep 临时加速度是否已写入
+        self._prepare_reads: dict[int, int] = {}
 
         self._settle_timer = QTimer(self)
         self._settle_timer.setSingleShot(True)
@@ -166,25 +175,33 @@ class HomeSearch(QObject):
         self._creep_start = 0
         self._orig_speed = None
         self._speed_lowered = False
+        self._orig_accel = None
+        self._accel_lowered = False
+        self._prepare_reads = {}
         # 先停机(写参数需停机)；DI 配置不动(DI1 常驻原点开关，只读电平)
         self._motor.disable()
         # 当前位置计数清 0
         self._motor.set_zero()
-        # 读当前最大速度(返回起点前临时降速、结束后恢复用)，读到后进入 sweep
+        # 读当前最大速度/加速度(临时改用、结束后恢复)，读齐后进入 sweep
         self._phase = "prepare"
         self._settling = False
         self._awaiting = False
         self._watchdog.start(self.OVERALL_TIMEOUT_MS)
         self._settle_timer.start(self.PREPARE_TIMEOUT_MS)  # 读取超时兜底
         self._motor.read_param(_MAX_SPEED_ADDR, 2)
+        self._motor.read_param(_ACCEL_ADDR, 2)
 
     # -- 内部 --
 
     def _on_param_read(self, addr: int, value: int) -> None:
-        if self._phase != "prepare" or addr != _MAX_SPEED_ADDR:
+        if self._phase != "prepare" or addr not in (_MAX_SPEED_ADDR, _ACCEL_ADDR):
+            return
+        self._prepare_reads[addr] = value
+        if len(self._prepare_reads) < 2:
             return
         self._settle_timer.stop()
-        self._orig_speed = value
+        self._orig_speed = self._prepare_reads[_MAX_SPEED_ADDR]
+        self._orig_accel = self._prepare_reads[_ACCEL_ADDR]
         # 此处不降 0x005B——它对速度模式同样钳速(会把 sweep/creep 钳到
         # SEARCH_SPEED)，降速推迟到返回起点前(_lower_speed_for_return)
         # 进入 sweep，先取首帧状态(决定触发判定是否需要先见释放帧)
@@ -207,12 +224,24 @@ class HomeSearch(QObject):
             self._motor.write_param_32bit(_MAX_SPEED_ADDR, self.SEARCH_SPEED)
             self._speed_lowered = True
 
+    def _lower_accel_for_creep(self) -> None:
+        """creep 前临时降加速度(0x005F)软化起步，转 returning/结束时恢复。"""
+        if self._orig_accel is not None and self._orig_accel != self.CREEP_ACCEL:
+            self._motor.write_param_32bit(_ACCEL_ADDR, self.CREEP_ACCEL)
+            self._accel_lowered = True
+
+    def _restore_accel(self) -> None:
+        if self._accel_lowered and self._orig_accel is not None:
+            self._motor.write_param_32bit(_ACCEL_ADDR, self._orig_accel)
+        self._accel_lowered = False
+
     def _on_settle_done(self) -> None:
         if self._phase == "prepare":
-            self._fail("读取最大速度超时")
+            self._fail("读取最大速度/加速度超时")
             return
         if self._phase == "stopping":
-            # sweep 停机整定完毕，进入低速反查(先取首帧确认已出感应区)
+            # sweep 停机整定完毕，降加速度后进入低速反查(先取首帧确认已出感应区)
+            self._lower_accel_for_creep()
             self._phase = "creep"
             self._motor.refresh_status()
             return
@@ -224,6 +253,7 @@ class HomeSearch(QObject):
                 self._finish_home()
             elif self._return_to_start:
                 self._phase = "returning"
+                self._restore_accel()   # 返回长行程不必用 creep 低加速度
                 self._lower_speed_for_return()
                 self._jog(+self._measured)
             else:
@@ -328,8 +358,10 @@ class HomeSearch(QObject):
         self._motor.disable()                                   # 脱机(写参数需停机)
         if self._speed_lowered and self._orig_speed is not None:
             self._motor.write_param_32bit(_MAX_SPEED_ADDR, self._orig_speed)
+        self._restore_accel()
         self._speed_lowered = False
         self._orig_speed = None
+        self._orig_accel = None
         self._phase = "idle"
         self._settling = False
         self._awaiting = False

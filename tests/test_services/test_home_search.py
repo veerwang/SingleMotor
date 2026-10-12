@@ -253,8 +253,9 @@ def test_speed_lowered_only_for_return_and_restored(app):
     assert fake2.speed_writes == []
 
 
-def test_accel_untouched(app):
-    """细搜取消后不再触碰加速度(0x005F)。"""
+def test_creep_accel_lowered_and_restored(app):
+    """creep 前临时把加速度降为 CREEP_ACCEL，转 returning/结束后恢复原值；
+    sweep 阶段保持全局加速度不受影响。"""
     fake = FakeMotor(sensor_pos=-500)
     hs = HomeSearch(fake)
     results = []
@@ -262,8 +263,19 @@ def test_accel_untouched(app):
     hs.start(pulses_per_sec=960, return_to_start=True)
     _drive(hs, fake, results)
     assert results == [548]
-    assert fake.accel_writes == []
+    assert fake.accel_writes == [HomeSearch.CREEP_ACCEL, 1000]  # creep 降、返回前恢复
     assert fake.accel == 1000
+
+    # 回零模式同样降/恢复(teardown 兜底恢复)
+    fake2 = FakeMotor(sensor_pos=-500)
+    hs2 = HomeSearch(fake2)
+    homed = []
+    hs2.homed.connect(lambda: homed.append(True))
+    hs2.start_homing(pulses_per_sec=960)
+    _drive(hs2, fake2, homed)
+    assert homed == [True]
+    assert fake2.accel_writes == [HomeSearch.CREEP_ACCEL, 1000]
+    assert fake2.accel == 1000
 
 
 def test_fail_when_speed_read_times_out(app):
@@ -276,7 +288,7 @@ def test_fail_when_speed_read_times_out(app):
     hs.failed.connect(lambda r: results.append(("fail", r)))
     hs.start(pulses_per_sec=960)
     hs._on_settle_done()  # 模拟读取超时到期
-    assert results == [("fail", "读取最大速度超时")]
+    assert results == [("fail", "读取最大速度/加速度超时")]
     assert fake.di_config_writes == []
     assert hs.running is False
 
