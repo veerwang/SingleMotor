@@ -13,15 +13,20 @@ fine，同参数)，fine 找到边沿后**就地设零**建立 home 基准，随
 
 防走样约束: 感应窗口实测仅约 50 脉冲宽(home 边沿起 -10~-55, ≈2°转盘)。
 sweep 速度必须满足 窗口穿越时间 ≥ 2×轮询周期，否则两次轮询之间会整个跨过
-窗口。SWEEP_SPEED=60 Step/s(×16=960 pulses/s) → 穿越 52ms ≥ 2~3 个 20ms
-轮询周期。若产品批次窗口更窄需相应降速(或缩短 POLL_MS)。另: 停车距离
-(29脉冲)+检测滞后(20)最深 49 脉冲 < BACKOFF(60)，回退后必在边沿上方。
+窗口。SWEEP_SPEED=80 Step/s(×16=1280 pulses/s) → 穿越 39ms ≈ 1.95 个 20ms
+轮询周期，贴约束下限(2026-10-12 经理定值 60→80，待真机复验不跨窗)。若产品
+批次窗口更窄需相应降速(或缩短 POLL_MS)。另: 停车距离(按60时29脉冲 ∝v² 折算
+≈52)+检测滞后(≈26)最深 ~78 脉冲 > BACKOFF(60)，首轮回退可能未出窗，
+由 backoff 循环兜底(多一轮 +60)。
 
 注: DI1 常驻"原点开关"配置，搜索只读取 DI 电平，不改 DI 功能。设计要求
 homing 传感器严禁配成限位(转盘无限位，自研固件会报 FF0E 超负限位故障)。
 
-搜索期间临时把最大速度(0x005B)降为 SEARCH_SPEED(先读原值，结束/失败恢复)，
-作用于回退/细搜/返回的点动精度；sweep 用速度模式目标速度(0x0055)，独立设置。
+点动阶段(backoff 起)临时把最大速度(0x005B)降为 SEARCH_SPEED(先读原值，
+结束/失败恢复)，作用于回退/细搜/返回的点动精度。注意 0x005B 对速度模式
+同样起钳制作用，故降速须在 sweep 结束后进行(_enter_backoff)——sweep 期间
+保持原最大速度，速度纯由速度模式目标速度(0x0055)=SWEEP_SPEED 决定，不受
+SEARCH_SPEED 与 SWEEP_SPEED 相对大小影响(消除钳速倒挂, 源自 boss 3535010)。
 细搜阶段另临时把加速度(0x005F)降为 FINE_ACCEL 软化微步逼近(2026-07-28 经理
 定值)，转 returning 或结束时恢复原值；减速度(0x0061)不动。
 
@@ -48,13 +53,15 @@ class HomeSearch(QObject):
     homed = pyqtSignal()         # 软件回零完成: 已在边沿设零并夹持
     failed = pyqtSignal(str)     # 失败原因(两种模式共用)
 
-    SWEEP_SPEED = 60             # sweep 连续扫描速度(Step/s)，见模块注释防走样约束
-                                 # (2026-07-28 经理定值 50→60)
+    SWEEP_SPEED = 80             # sweep 连续扫描速度(Step/s)，见模块注释防走样约束
+                                 # (2026-10-12 经理定值 60→80, 穿窗39ms≈1.95轮询周期
+                                 # 贴下限, 待真机复验)
     POLL_MS = 20                 # sweep 期间状态轮询周期(2026-07-28 经理定值 25→20)
     FINE_STEP = 2                # 细搜步长(脉冲)，决定最终精度
-    BACKOFF = 60                 # 触发后回退步长(释放开关)。停点最深在边沿下方
-                                 # ~40脉冲(轮询量化20+停车距离20)，60一次可出窗，
-                                 # 循环兜底；取小减少细搜空走步数(2026-07-28 经理定值 90→60)
+    BACKOFF = 60                 # 触发后回退步长(释放开关)。sweep=80 时停点最深
+                                 # ~78脉冲(停车≈52+滞后≈26)，首轮60可能未出窗，
+                                 # 循环兜底再退60；取小减少细搜空走步数
+                                 # (2026-07-28 经理定值 90→60)
     MAX_TRAVEL = 10000           # 默认搜索行程上限(>默认齿轮比下转盘一圈 8800)；
                                  # 齿轮比可配置后调用方按实际一圈脉冲经 start()/
                                  # start_homing() 的 max_travel 参数传入覆盖
@@ -182,8 +189,8 @@ class HomeSearch(QObject):
         self._settle_timer.stop()
         self._orig_speed = self._prepare_reads[_MAX_SPEED_ADDR]
         self._orig_accel = self._prepare_reads[_ACCEL_ADDR]
-        if self._orig_speed != self.SEARCH_SPEED:
-            self._motor.write_param_32bit(_MAX_SPEED_ADDR, self.SEARCH_SPEED)
+        # 此处不降 0x005B——它对速度模式同样钳速(会把 sweep 钳到 SEARCH_SPEED)，
+        # 降速推迟到点动阶段(_enter_backoff)
         # 进入 sweep，先取首帧状态(覆盖起点已在窗口内的情况)
         self._phase = "sweep"
         self._awaiting = True
@@ -198,6 +205,13 @@ class HomeSearch(QObject):
         self._awaiting = False
         self._motor.move_relative(step)
         self._settle_timer.start(self._settle_for(step))
+
+    def _enter_backoff(self) -> None:
+        """进入点动阶段：此刻电机已停，先降最大速度再回退(sweep 期间不可降)。"""
+        if self._orig_speed is not None and self._orig_speed != self.SEARCH_SPEED:
+            self._motor.write_param_32bit(_MAX_SPEED_ADDR, self.SEARCH_SPEED)
+        self._phase = "backoff"
+        self._jog(+self.BACKOFF)
 
     def _lower_accel_for_fine(self) -> None:
         """细搜前临时降加速度(0x005F)软化微步逼近，转 returning/结束时恢复。"""
@@ -216,8 +230,7 @@ class HomeSearch(QObject):
             return
         if self._phase == "stopping":
             # sweep 停机整定完毕，开始回退
-            self._phase = "backoff"
-            self._jog(+self.BACKOFF)
+            self._enter_backoff()
             return
         self._settling = False
         self._awaiting = True
@@ -241,8 +254,7 @@ class HomeSearch(QObject):
             if not self._sweeping:
                 # 首帧: 起点已在窗口内则直接回退，否则启动连续扫描
                 if triggered:
-                    self._phase = "backoff"
-                    self._jog(+self.BACKOFF)
+                    self._enter_backoff()
                 else:
                     self._sweeping = True
                     self._motor.set_speed(self.SWEEP_SPEED, 0)  # 0=反转(负向)
