@@ -527,9 +527,12 @@ class IntegrationTestTab(QWidget):
         self._rh_timer.start(self._MOVE_TIMEOUT_MS)
         self._motor.move_relative(self._rh_hole_pulses)
 
-    def _rh_launch_offset_move(self) -> None:
+    def _rh_launch_offset_move(self, base: int = 0) -> None:
         """移到偏移点作为下一轮起点(A/D=窗口正侧, B=负侧整圈, C=窗口内)。
 
+        base 为当前位置计数基准: A~D 在回零后发起(位置=0, 默认值);
+        E 在孔位序列末发起(位置=8孔累计, 2026-10-13 真机实锤——按 0 起算
+        会拿 17600+800 对比 800 永不相等, 误报移动超时)。
         B/C 加随机扰动打散穿窗时刻相对轮询节拍的相位(防相位锁定)。
         完成判定用位置读数而非"起动→停止"跳变: 短偏移(如-100, ~40ms)
         在 500ms 轮询间隙内即走完, 等跳变必然漏过(2026-10-13 真机实锤)。
@@ -548,7 +551,7 @@ class IntegrationTestTab(QWidget):
             else self._rh_one_rev + offset_used
         )
         self._phase = "rh_moving"
-        self._rh_move_target = offset_used  # 回零后位置=0, 目标即偏移值
+        self._rh_move_target = base + offset_used
         self._rh_timer.start(self._MOVE_TIMEOUT_MS)
         self._motor.move_relative(offset_used)
 
@@ -693,7 +696,8 @@ class IntegrationTestTab(QWidget):
                 if not status.is_running and status.position == self._rh_move_target:
                     self._rh_timer.stop()
                     if self._rh_hole_idx >= self._RH_HOLE_MOVES:
-                        self._rh_launch_offset_move()  # 孔位序列完成 → 移至偏移点
+                        # 孔位序列完成 → 移至偏移点(以序列终点为位置基准)
+                        self._rh_launch_offset_move(base=self._rh_move_target)
                     else:
                         self._rh_next_hole_move()
             return
