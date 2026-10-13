@@ -92,6 +92,10 @@ class IntegrationTestTab(QWidget):
       孔位移动是开环的, 若切换中丢步, 位置计数与物理位置失配, 最后的
       回零会把累计丢步量出来: 边沿偏差≈0=两圈零丢步, 偏差即丢步数。
       回零失败则重建基准后继续下一轮
+    - F 零间歇连发(偏移0, 原地): 回零成功后不移开, 直接从零点(=感应
+      窗口边沿, DI 电平可能抖动的边界位置)再次回零——考验边界起点处理
+      (armed 判定对边沿抖动的鲁棒性)与零间歇连续作业的通讯/占空比压力。
+      每轮必绕整圈, 期望边沿距离=一圈, 偏差口径与其他项目一致
 
     重复性统计用"边沿偏差"= 实测边沿距离 − 期望值(短距类期望=偏移;
     整圈类期望=一圈脉冲+偏移, B/C 均属整圈类), 随机起点下同口径可比。
@@ -274,6 +278,9 @@ class IntegrationTestTab(QWidget):
         )
         self._rh_mode_combo.addItem(
             "E 孔位压力(2圈8孔+回零查漂移)", (800, 0, "short", "holes")
+        )
+        self._rh_mode_combo.addItem(
+            "F 零间歇连发(原地, 边界起点)", (0, 0, "full", "home")
         )
         self._rh_mode_combo.addItem("自定义", None)
         self._rh_mode_combo.currentIndexChanged.connect(self._on_rh_mode_changed)
@@ -499,8 +506,13 @@ class IntegrationTestTab(QWidget):
         if ok and self._rh_offset != 0:
             self._rh_launch_offset_move()
         else:
-            # 失败后(或无偏移)稍候原地发起下一轮, 起点不明不计重复性样本
-            self._rh_prev_expected = None
+            # 失败后(或无偏移)稍候原地发起下一轮
+            if ok and self._rh_offset == 0 and self._rh_exp_mode == "full":
+                # F: 原地连发, 起点=零点(边沿), 必绕整圈 → 期望边沿距离=一圈
+                self._rh_prev_expected = self._rh_one_rev
+            else:
+                # 失败后起点不明, 不计重复性样本
+                self._rh_prev_expected = None
             self._phase = "rh_homing_wait"
             QTimer.singleShot(500, self._rh_begin_cycle)
 
