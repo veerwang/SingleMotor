@@ -79,9 +79,14 @@ class IntegrationTestTab(QWidget):
       起点随机化消除相位锁定: 固定起点下穿窗时刻相对 20ms 轮询节拍每轮
       近似相同, 只检验单一相位; 300 脉冲随机跨度≈125ms, 扫遍 6 个轮询
       周期的相位空间(每 1 脉冲≈0.4ms 相移, ≥48 脉冲才覆盖一个周期)
+    - C 窗口内起点(偏移+10~+40 每轮随机): 起点落在感应窗口内部(窗口为
+      回零后 0~+50), 一上来 DI 即触发——考验 armed(先见释放帧才认触发)
+      兜底逻辑: 不得把起点假触发当作感应点, 必须绕整圈从正侧重新进窗。
+      随机深度覆盖窗口不同位置, 两端各留 ~10 脉冲防边沿抖动
 
-    重复性统计用"边沿偏差"= 实测边沿距离 − 期望值(正偏移: 期望=偏移;
-    负偏移: 期望=一圈脉冲+偏移), 随机起点下依然同口径可比。
+    重复性统计用"边沿偏差"= 实测边沿距离 − 期望值(短距类期望=偏移;
+    整圈类期望=一圈脉冲+偏移, B/C 均属整圈类), 随机起点下同口径可比。
+    自定义模式按符号推断: 正偏移=短距, 负偏移=整圈。
     """
 
     _POLL_INTERVAL_MS = 500  # 状态轮询周期
@@ -116,9 +121,10 @@ class IntegrationTestTab(QWidget):
         self._rh_fail_reasons: list[str] = []
         self._rh_cycle_t0 = 0.0
         self._rh_move_target = 0  # 偏移移动的目标位置(回零后为0起点, 即=本轮偏移)
-        self._rh_random_span = 0  # 偏移随机跨度(B 项目=300, 扰动轮询相位)
-        self._rh_prev_offset = 0  # 上一轮实际使用的偏移(重复性期望值计算用)
-        self._rh_one_rev = 0      # 一圈脉冲数(负偏移的期望边沿距离=一圈+偏移)
+        self._rh_random_span = 0  # 偏移随机跨度(B=300/C=30, 扰动轮询相位)
+        self._rh_exp_mode = "auto"  # 期望口径: short/full/auto(按符号推断)
+        self._rh_prev_expected: int | None = None  # 本轮起点对应的期望边沿距离
+        self._rh_one_rev = 0      # 一圈脉冲数(整圈类期望边沿距离=一圈+偏移)
         self._rh_timer = QTimer(self)
         self._rh_timer.setSingleShot(True)
         self._rh_timer.timeout.connect(self._on_rh_timeout)
@@ -238,8 +244,14 @@ class IntegrationTestTab(QWidget):
         rh_row = QHBoxLayout()
         rh_row.addWidget(QLabel("项目:"))
         self._rh_mode_combo = QComboBox()
-        self._rh_mode_combo.addItem("A 短距重复性(+800)", (800, 0))
-        self._rh_mode_combo.addItem("B 整圈扫描漏窗(-100~-400随机)", (-100, 300))
+        # 预设数据: (基准偏移, 随机跨度, 期望口径 short=偏移 / full=一圈+偏移)
+        self._rh_mode_combo.addItem("A 短距重复性(+800)", (800, 0, "short"))
+        self._rh_mode_combo.addItem(
+            "B 整圈扫描漏窗(-100~-400随机)", (-100, 300, "full")
+        )
+        self._rh_mode_combo.addItem(
+            "C 窗口内起点(+10~+40随机)", (10, 30, "full")
+        )
         self._rh_mode_combo.addItem("自定义", None)
         self._rh_mode_combo.currentIndexChanged.connect(self._on_rh_mode_changed)
         rh_row.addWidget(self._rh_mode_combo)
@@ -356,6 +368,7 @@ class IntegrationTestTab(QWidget):
 
         preset = self._rh_mode_combo.currentData()
         self._rh_random_span = preset[1] if preset is not None else 0
+        self._rh_exp_mode = preset[2] if preset is not None else "auto"
         self._rh_one_rev = 4 * calculate_pulses_per_position(
             self._microstep, load_gear_ratio()
         )
@@ -364,7 +377,7 @@ class IntegrationTestTab(QWidget):
         self._rh_done = 0
         self._rh_ok = 0
         self._rh_prev_ok = False
-        self._rh_prev_offset = 0
+        self._rh_prev_expected = None
         self._rh_dists = []
         self._rh_durs = []
         self._rh_fail_reasons = []
@@ -411,16 +424,11 @@ class IntegrationTestTab(QWidget):
             self._rh_ok += 1
             self._rh_durs.append(duration)
             # 仅"上一轮成功且从偏移点出发"的轮次计入重复性样本。
-            # 记录"边沿偏差"=实测-期望(正偏移期望=偏移; 负偏移期望=一圈+偏移),
+            # 记录"边沿偏差"=实测-期望(期望值在发起偏移移动时按口径算好),
             # 起点随机化后依然同口径可比
-            if self._rh_prev_ok and self._rh_prev_offset != 0 and self._rh_done > 1:
-                expected = (
-                    self._rh_prev_offset
-                    if self._rh_prev_offset > 0
-                    else self._rh_one_rev + self._rh_prev_offset
-                )
+            if self._rh_prev_ok and self._rh_prev_expected is not None:
                 self._rh_dists.append(
-                    self._homer.last_edge_distance - expected
+                    self._homer.last_edge_distance - self._rh_prev_expected
                 )
         else:
             self._rh_fail_reasons.append(reason)
@@ -431,8 +439,8 @@ class IntegrationTestTab(QWidget):
             self._rh_finish("测试完成")
             return
         if ok and self._rh_offset != 0:
-            # 移到偏移点作为下一轮起点(正=窗口正侧短距, 负=负侧整圈)。
-            # B 项目加随机扰动打散穿窗时刻相对轮询节拍的相位(防相位锁定)。
+            # 移到偏移点作为下一轮起点(A=窗口正侧短距, B=负侧整圈, C=窗口内)。
+            # B/C 加随机扰动打散穿窗时刻相对轮询节拍的相位(防相位锁定)。
             # 完成判定用位置读数而非"起动→停止"跳变: 短偏移(如-100, ~40ms)
             # 在 500ms 轮询间隙内即走完, 等跳变必然漏过(2026-10-13 真机实锤)
             jitter = random.randint(0, self._rh_random_span)
@@ -441,13 +449,20 @@ class IntegrationTestTab(QWidget):
                 if self._rh_offset < 0
                 else self._rh_offset + jitter
             )
-            self._rh_prev_offset = offset_used
+            mode = self._rh_exp_mode
+            if mode == "auto":
+                mode = "short" if offset_used > 0 else "full"
+            self._rh_prev_expected = (
+                offset_used if mode == "short"
+                else self._rh_one_rev + offset_used
+            )
             self._phase = "rh_moving"
             self._rh_move_target = offset_used  # 回零后位置=0, 目标即偏移值
             self._rh_timer.start(self._MOVE_TIMEOUT_MS)
             self._motor.move_relative(offset_used)
         else:
-            # 失败后(或无偏移)稍候原地发起下一轮
+            # 失败后(或无偏移)稍候原地发起下一轮, 起点不明不计重复性样本
+            self._rh_prev_expected = None
             self._phase = "rh_homing_wait"
             QTimer.singleShot(500, self._rh_begin_cycle)
 
