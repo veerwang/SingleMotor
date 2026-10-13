@@ -83,6 +83,10 @@ class IntegrationTestTab(QWidget):
       回零后 0~+50), 一上来 DI 即触发——考验 armed(先见释放帧才认触发)
       兜底逻辑: 不得把起点假触发当作感应点, 必须绕整圈从正侧重新进窗。
       随机深度覆盖窗口不同位置, 两端各留 ~10 脉冲防边沿抖动
+    - D 测距模式(+800 固定起点, 带返回): 循环跑 HomeSearch.start() 测距
+      而非回零——覆盖回零不经过的返回点动与 0x005B 临时限速路径。先回零
+      +移至 +800 建立固定起点(不计数), 此后每轮测距并自动返回原地, 测距
+      值与 800 的偏差即重复性; 测距失败时重建基准(回零+偏移)后继续
 
     重复性统计用"边沿偏差"= 实测边沿距离 − 期望值(短距类期望=偏移;
     整圈类期望=一圈脉冲+偏移, B/C 均属整圈类), 随机起点下同口径可比。
@@ -123,6 +127,8 @@ class IntegrationTestTab(QWidget):
         self._rh_move_target = 0  # 偏移移动的目标位置(回零后为0起点, 即=本轮偏移)
         self._rh_random_span = 0  # 偏移随机跨度(B=300/C=30, 扰动轮询相位)
         self._rh_exp_mode = "auto"  # 期望口径: short/full/auto(按符号推断)
+        self._rh_op = "home"      # 每轮操作: home=回零 / measure=测距带返回(D)
+        self._rh_need_setup = False  # D: 是否需先回零+偏移建立固定起点
         self._rh_prev_expected: int | None = None  # 本轮起点对应的期望边沿距离
         self._rh_one_rev = 0      # 一圈脉冲数(整圈类期望边沿距离=一圈+偏移)
         self._rh_timer = QTimer(self)
@@ -150,6 +156,7 @@ class IntegrationTestTab(QWidget):
         )
         self._homer.homed.connect(self._on_homing_done)
         self._homer.failed.connect(self._on_homing_failed)
+        self._homer.finished.connect(self._on_rh_measure_done)
 
         self._init_ui()
 
@@ -244,13 +251,17 @@ class IntegrationTestTab(QWidget):
         rh_row = QHBoxLayout()
         rh_row.addWidget(QLabel("项目:"))
         self._rh_mode_combo = QComboBox()
-        # 预设数据: (基准偏移, 随机跨度, 期望口径 short=偏移 / full=一圈+偏移)
-        self._rh_mode_combo.addItem("A 短距重复性(+800)", (800, 0, "short"))
+        # 预设数据: (基准偏移, 随机跨度, 期望口径 short=偏移 / full=一圈+偏移,
+        #            操作 home=回零 / measure=测距带返回)
+        self._rh_mode_combo.addItem("A 短距重复性(+800)", (800, 0, "short", "home"))
         self._rh_mode_combo.addItem(
-            "B 整圈扫描漏窗(-100~-400随机)", (-100, 300, "full")
+            "B 整圈扫描漏窗(-100~-400随机)", (-100, 300, "full", "home")
         )
         self._rh_mode_combo.addItem(
-            "C 窗口内起点(+10~+40随机)", (10, 30, "full")
+            "C 窗口内起点(+10~+40随机)", (10, 30, "full", "home")
+        )
+        self._rh_mode_combo.addItem(
+            "D 测距模式(+800, 带返回)", (800, 0, "short", "measure")
         )
         self._rh_mode_combo.addItem("自定义", None)
         self._rh_mode_combo.currentIndexChanged.connect(self._on_rh_mode_changed)
@@ -369,6 +380,8 @@ class IntegrationTestTab(QWidget):
         preset = self._rh_mode_combo.currentData()
         self._rh_random_span = preset[1] if preset is not None else 0
         self._rh_exp_mode = preset[2] if preset is not None else "auto"
+        self._rh_op = preset[3] if preset is not None else "home"
+        self._rh_need_setup = self._rh_op == "measure"
         self._rh_one_rev = 4 * calculate_pulses_per_position(
             self._microstep, load_gear_ratio()
         )
@@ -401,19 +414,31 @@ class IntegrationTestTab(QWidget):
         if not self._rh_running:
             return
         assert self._microstep is not None
-        self._phase = "rh_homing"
+        pps = HomeSearch.SEARCH_SPEED * self._microstep
+        max_travel = self._rh_one_rev + 1200
+        if self._rh_op == "measure" and self._rh_need_setup:
+            # D: 先回零+移至偏移点建立固定起点(不计入次数)
+            self._phase = "rh_setup_homing"
+            self._rh_progress_label.setText("进度: 建立基准(回零+偏移)...")
+            self._rh_timer.start(self._HOME_TIMEOUT_MS)
+            self._homer.start_homing(pulses_per_sec=pps, max_travel=max_travel)
+            return
         self._rh_cycle_t0 = time.monotonic()
-        self._rh_progress_label.setText(
-            f"进度: 第 {self._rh_done + 1} / {self._rh_target} 次 回零中..."
-        )
         self._rh_timer.start(self._HOME_TIMEOUT_MS)
-        one_rev = 4 * calculate_pulses_per_position(
-            self._microstep, load_gear_ratio()
-        )
-        self._homer.start_homing(
-            pulses_per_sec=HomeSearch.SEARCH_SPEED * self._microstep,
-            max_travel=one_rev + 1200,
-        )
+        if self._rh_op == "measure":
+            self._phase = "rh_measuring"
+            self._rh_progress_label.setText(
+                f"进度: 第 {self._rh_done + 1} / {self._rh_target} 次 测距中..."
+            )
+            self._homer.start(
+                pulses_per_sec=pps, return_to_start=True, max_travel=max_travel
+            )
+        else:
+            self._phase = "rh_homing"
+            self._rh_progress_label.setText(
+                f"进度: 第 {self._rh_done + 1} / {self._rh_target} 次 回零中..."
+            )
+            self._homer.start_homing(pulses_per_sec=pps, max_travel=max_travel)
 
     def _rh_cycle_finished(self, ok: bool, reason: str = "") -> None:
         """一次回零结束(成功/失败/超时均到此), 记账并推进。"""
@@ -423,10 +448,12 @@ class IntegrationTestTab(QWidget):
         if ok:
             self._rh_ok += 1
             self._rh_durs.append(duration)
-            # 仅"上一轮成功且从偏移点出发"的轮次计入重复性样本。
-            # 记录"边沿偏差"=实测-期望(期望值在发起偏移移动时按口径算好),
-            # 起点随机化后依然同口径可比
-            if self._rh_prev_ok and self._rh_prev_expected is not None:
+            # 仅"从已知偏移点出发"的轮次计入重复性样本(回零类还须上轮成功;
+            # 测距类自动返回原地, 起点持续有效)。记录"边沿偏差"=实测-期望
+            # (期望值在发起偏移移动时按口径算好), 起点随机化后依然同口径可比
+            if self._rh_prev_expected is not None and (
+                self._rh_prev_ok or self._rh_op == "measure"
+            ):
                 self._rh_dists.append(
                     self._homer.last_edge_distance - self._rh_prev_expected
                 )
@@ -438,33 +465,46 @@ class IntegrationTestTab(QWidget):
         if self._rh_done >= self._rh_target:
             self._rh_finish("测试完成")
             return
+        if self._rh_op == "measure":
+            # D: 成功时已自动返回起点, 直接下一轮; 失败则重建基准
+            if not ok:
+                self._rh_need_setup = True
+                self._rh_prev_expected = None
+            self._phase = "rh_homing_wait"
+            QTimer.singleShot(500, self._rh_begin_cycle)
+            return
         if ok and self._rh_offset != 0:
-            # 移到偏移点作为下一轮起点(A=窗口正侧短距, B=负侧整圈, C=窗口内)。
-            # B/C 加随机扰动打散穿窗时刻相对轮询节拍的相位(防相位锁定)。
-            # 完成判定用位置读数而非"起动→停止"跳变: 短偏移(如-100, ~40ms)
-            # 在 500ms 轮询间隙内即走完, 等跳变必然漏过(2026-10-13 真机实锤)
-            jitter = random.randint(0, self._rh_random_span)
-            offset_used = (
-                self._rh_offset - jitter
-                if self._rh_offset < 0
-                else self._rh_offset + jitter
-            )
-            mode = self._rh_exp_mode
-            if mode == "auto":
-                mode = "short" if offset_used > 0 else "full"
-            self._rh_prev_expected = (
-                offset_used if mode == "short"
-                else self._rh_one_rev + offset_used
-            )
-            self._phase = "rh_moving"
-            self._rh_move_target = offset_used  # 回零后位置=0, 目标即偏移值
-            self._rh_timer.start(self._MOVE_TIMEOUT_MS)
-            self._motor.move_relative(offset_used)
+            self._rh_launch_offset_move()
         else:
             # 失败后(或无偏移)稍候原地发起下一轮, 起点不明不计重复性样本
             self._rh_prev_expected = None
             self._phase = "rh_homing_wait"
             QTimer.singleShot(500, self._rh_begin_cycle)
+
+    def _rh_launch_offset_move(self) -> None:
+        """移到偏移点作为下一轮起点(A/D=窗口正侧, B=负侧整圈, C=窗口内)。
+
+        B/C 加随机扰动打散穿窗时刻相对轮询节拍的相位(防相位锁定)。
+        完成判定用位置读数而非"起动→停止"跳变: 短偏移(如-100, ~40ms)
+        在 500ms 轮询间隙内即走完, 等跳变必然漏过(2026-10-13 真机实锤)。
+        """
+        jitter = random.randint(0, self._rh_random_span)
+        offset_used = (
+            self._rh_offset - jitter
+            if self._rh_offset < 0
+            else self._rh_offset + jitter
+        )
+        mode = self._rh_exp_mode
+        if mode == "auto":
+            mode = "short" if offset_used > 0 else "full"
+        self._rh_prev_expected = (
+            offset_used if mode == "short"
+            else self._rh_one_rev + offset_used
+        )
+        self._phase = "rh_moving"
+        self._rh_move_target = offset_used  # 回零后位置=0, 目标即偏移值
+        self._rh_timer.start(self._MOVE_TIMEOUT_MS)
+        self._motor.move_relative(offset_used)
 
     def _rh_update_stats(self) -> None:
         parts = [f"成功 {self._rh_ok}/{self._rh_done}"]
@@ -505,9 +545,12 @@ class IntegrationTestTab(QWidget):
     def _on_rh_timeout(self) -> None:
         if not self._rh_running:
             return
-        if self._phase == "rh_homing":
+        if self._phase in ("rh_homing", "rh_setup_homing", "rh_measuring"):
             self._homer.cancel()
-            self._rh_cycle_finished(False, "回零超时")
+            tag = "测距超时" if self._phase == "rh_measuring" else "回零超时"
+            if self._phase == "rh_setup_homing":
+                tag = "建立基准超时"
+            self._rh_cycle_finished(False, tag)
         else:
             # 偏移移动超时属硬件异常, 终止测试
             self._motor.stop()
@@ -591,6 +634,7 @@ class IntegrationTestTab(QWidget):
             if self._phase == "rh_moving":
                 if not status.is_running and status.position == self._rh_move_target:
                     self._rh_timer.stop()
+                    self._rh_need_setup = False  # D: 基准(回零+偏移)已就绪
                     self._rh_begin_cycle()
             return
         if not self._running:
@@ -606,13 +650,28 @@ class IntegrationTestTab(QWidget):
         if self._rh_running and self._phase == "rh_homing":
             self._rh_cycle_finished(True)
             return
+        if self._rh_running and self._phase == "rh_setup_homing":
+            # D: 基准回零成功, 移到偏移点(不计数)
+            self._rh_timer.stop()
+            self._rh_launch_offset_move()
+            return
         if not self._running or self._phase != "homing":
             return
         self._advance_step()
 
+    def _on_rh_measure_done(self, distance: int) -> None:
+        if self._rh_running and self._phase == "rh_measuring":
+            self._rh_cycle_finished(True)
+
     def _on_homing_failed(self, reason: str) -> None:
-        if self._rh_running and self._phase == "rh_homing":
+        if self._rh_running and self._phase in (
+            "rh_homing", "rh_measuring"
+        ):
             self._rh_cycle_finished(False, reason)
+            return
+        if self._rh_running and self._phase == "rh_setup_homing":
+            # D: 基准建立失败计一次失败, 稍后重试建基准
+            self._rh_cycle_finished(False, f"建立基准失败: {reason}")
             return
         if not self._running or self._phase != "homing":
             return
