@@ -94,7 +94,7 @@ class IntegrationTestTab(QWidget):
         self._loop_done = 0
         self._step_idx = 0
         # idle / homing / wait_start / wait_stop / pausing
-        # / rh_homing / rh_wait_start / rh_wait_stop (连续回零测试)
+        # / rh_homing / rh_moving (连续回零测试)
         self._phase = "idle"
 
         # 连续回零测试状态
@@ -108,6 +108,7 @@ class IntegrationTestTab(QWidget):
         self._rh_durs: list[float] = []
         self._rh_fail_reasons: list[str] = []
         self._rh_cycle_t0 = 0.0
+        self._rh_move_target = 0  # 偏移移动的目标位置(回零后为0起点, 即=偏移值)
         self._rh_timer = QTimer(self)
         self._rh_timer.setSingleShot(True)
         self._rh_timer.timeout.connect(self._on_rh_timeout)
@@ -405,8 +406,11 @@ class IntegrationTestTab(QWidget):
             self._rh_finish("测试完成")
             return
         if ok and self._rh_offset != 0:
-            # 移到偏移点作为下一轮固定起点(正=窗口正侧短距, 负=负侧整圈)
-            self._phase = "rh_wait_start"
+            # 移到偏移点作为下一轮固定起点(正=窗口正侧短距, 负=负侧整圈)。
+            # 完成判定用位置读数而非"起动→停止"跳变: 短偏移(如-100, ~40ms)
+            # 在 500ms 轮询间隙内即走完, 等跳变必然漏过(2026-10-13 真机实锤)
+            self._phase = "rh_moving"
+            self._rh_move_target = self._rh_offset  # 回零后位置=0, 目标即偏移值
             self._rh_timer.start(self._MOVE_TIMEOUT_MS)
             self._motor.move_relative(self._rh_offset)
         else:
@@ -536,11 +540,8 @@ class IntegrationTestTab(QWidget):
 
     def _on_status_updated(self, status: MotorStatus) -> None:
         if self._rh_running:
-            if self._phase == "rh_wait_start":
-                if status.is_running:
-                    self._phase = "rh_wait_stop"
-            elif self._phase == "rh_wait_stop":
-                if not status.is_running:
+            if self._phase == "rh_moving":
+                if not status.is_running and status.position == self._rh_move_target:
                     self._rh_timer.stop()
                     self._rh_begin_cycle()
             return
