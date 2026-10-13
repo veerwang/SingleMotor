@@ -87,6 +87,11 @@ class IntegrationTestTab(QWidget):
       而非回零——覆盖回零不经过的返回点动与 0x005B 临时限速路径。先回零
       +移至 +800 建立固定起点(不计数), 此后每轮测距并自动返回原地, 测距
       值与 800 的偏差即重复性; 测距失败时重建基准(回零+偏移)后继续
+    - E 孔位压力(2圈8孔+回零查漂移): 模拟真实工作负载——每轮依次执行
+      8 次孔位相对移动(+一孔脉冲 ×8 = 转 2 整圈)→ 移至 +800 → 回零。
+      孔位移动是开环的, 若切换中丢步, 位置计数与物理位置失配, 最后的
+      回零会把累计丢步量出来: 边沿偏差≈0=两圈零丢步, 偏差即丢步数。
+      回零失败则重建基准后继续下一轮
 
     重复性统计用"边沿偏差"= 实测边沿距离 − 期望值(短距类期望=偏移;
     整圈类期望=一圈脉冲+偏移, B/C 均属整圈类), 随机起点下同口径可比。
@@ -127,8 +132,10 @@ class IntegrationTestTab(QWidget):
         self._rh_move_target = 0  # 偏移移动的目标位置(回零后为0起点, 即=本轮偏移)
         self._rh_random_span = 0  # 偏移随机跨度(B=300/C=30, 扰动轮询相位)
         self._rh_exp_mode = "auto"  # 期望口径: short/full/auto(按符号推断)
-        self._rh_op = "home"      # 每轮操作: home=回零 / measure=测距带返回(D)
-        self._rh_need_setup = False  # D: 是否需先回零+偏移建立固定起点
+        self._rh_op = "home"      # 每轮操作: home=回零 / measure=测距(D) / holes=孔位压力(E)
+        self._rh_need_setup = False  # D/E: 是否需先回零建立基准
+        self._rh_hole_idx = 0     # E: 当前孔位移动序号(1..8)
+        self._rh_hole_pulses = 0  # E: 一孔脉冲数
         self._rh_prev_expected: int | None = None  # 本轮起点对应的期望边沿距离
         self._rh_one_rev = 0      # 一圈脉冲数(整圈类期望边沿距离=一圈+偏移)
         self._rh_timer = QTimer(self)
@@ -263,6 +270,9 @@ class IntegrationTestTab(QWidget):
         self._rh_mode_combo.addItem(
             "D 测距模式(+800, 带返回)", (800, 0, "short", "measure")
         )
+        self._rh_mode_combo.addItem(
+            "E 孔位压力(2圈8孔+回零查漂移)", (800, 0, "short", "holes")
+        )
         self._rh_mode_combo.addItem("自定义", None)
         self._rh_mode_combo.currentIndexChanged.connect(self._on_rh_mode_changed)
         rh_row.addWidget(self._rh_mode_combo)
@@ -381,7 +391,7 @@ class IntegrationTestTab(QWidget):
         self._rh_random_span = preset[1] if preset is not None else 0
         self._rh_exp_mode = preset[2] if preset is not None else "auto"
         self._rh_op = preset[3] if preset is not None else "home"
-        self._rh_need_setup = self._rh_op == "measure"
+        self._rh_need_setup = self._rh_op in ("measure", "holes")
         self._rh_one_rev = 4 * calculate_pulses_per_position(
             self._microstep, load_gear_ratio()
         )
@@ -416,10 +426,10 @@ class IntegrationTestTab(QWidget):
         assert self._microstep is not None
         pps = HomeSearch.SEARCH_SPEED * self._microstep
         max_travel = self._rh_one_rev + 1200
-        if self._rh_op == "measure" and self._rh_need_setup:
-            # D: 先回零+移至偏移点建立固定起点(不计入次数)
+        if self._rh_need_setup and self._rh_op in ("measure", "holes"):
+            # D/E: 先回零建立基准(不计入次数; D 随后移至偏移点, E 随后跑孔位)
             self._phase = "rh_setup_homing"
-            self._rh_progress_label.setText("进度: 建立基准(回零+偏移)...")
+            self._rh_progress_label.setText("进度: 建立基准回零...")
             self._rh_timer.start(self._HOME_TIMEOUT_MS)
             self._homer.start_homing(pulses_per_sec=pps, max_travel=max_travel)
             return
@@ -451,8 +461,9 @@ class IntegrationTestTab(QWidget):
             # 仅"从已知偏移点出发"的轮次计入重复性样本(回零类还须上轮成功;
             # 测距类自动返回原地, 起点持续有效)。记录"边沿偏差"=实测-期望
             # (期望值在发起偏移移动时按口径算好), 起点随机化后依然同口径可比
+            # D/E 的起点由固定流程(建基准/孔位序列+偏移)保证, 不依赖上轮成功
             if self._rh_prev_expected is not None and (
-                self._rh_prev_ok or self._rh_op == "measure"
+                self._rh_prev_ok or self._rh_op in ("measure", "holes")
             ):
                 self._rh_dists.append(
                     self._homer.last_edge_distance - self._rh_prev_expected
@@ -473,6 +484,16 @@ class IntegrationTestTab(QWidget):
             self._phase = "rh_homing_wait"
             QTimer.singleShot(500, self._rh_begin_cycle)
             return
+        if self._rh_op == "holes":
+            # E: 回零成功后(此刻在零点)开始下一轮孔位序列; 失败则重建基准
+            if ok:
+                self._rh_start_hole_sequence()
+            else:
+                self._rh_need_setup = True
+                self._rh_prev_expected = None
+                self._phase = "rh_homing_wait"
+                QTimer.singleShot(500, self._rh_begin_cycle)
+            return
         if ok and self._rh_offset != 0:
             self._rh_launch_offset_move()
         else:
@@ -480,6 +501,29 @@ class IntegrationTestTab(QWidget):
             self._rh_prev_expected = None
             self._phase = "rh_homing_wait"
             QTimer.singleShot(500, self._rh_begin_cycle)
+
+    _RH_HOLE_MOVES = 8  # E: 每轮孔位移动次数(2 圈 × 4 孔)
+
+    def _rh_start_hole_sequence(self) -> None:
+        """E: 从零点开始连续孔位移动(开环), 结束后移至偏移点回零查累计丢步。"""
+        assert self._microstep is not None
+        self._rh_hole_pulses = calculate_pulses_per_position(
+            self._microstep, load_gear_ratio()
+        )
+        self._rh_hole_idx = 0
+        self._rh_move_target = 0  # 回零后从 0 起累计
+        self._phase = "rh_hole_moving"
+        self._rh_next_hole_move()
+
+    def _rh_next_hole_move(self) -> None:
+        self._rh_hole_idx += 1
+        self._rh_move_target += self._rh_hole_pulses
+        self._rh_progress_label.setText(
+            f"进度: 第 {self._rh_done + 1} / {self._rh_target} 次 "
+            f"孔位移动 {self._rh_hole_idx}/{self._RH_HOLE_MOVES}..."
+        )
+        self._rh_timer.start(self._MOVE_TIMEOUT_MS)
+        self._motor.move_relative(self._rh_hole_pulses)
 
     def _rh_launch_offset_move(self) -> None:
         """移到偏移点作为下一轮起点(A/D=窗口正侧, B=负侧整圈, C=窗口内)。
@@ -552,9 +596,9 @@ class IntegrationTestTab(QWidget):
                 tag = "建立基准超时"
             self._rh_cycle_finished(False, tag)
         else:
-            # 偏移移动超时属硬件异常, 终止测试
+            # 偏移/孔位移动超时属硬件异常, 终止测试
             self._motor.stop()
-            self._rh_finish("偏移移动超时，测试中止", error=True)
+            self._rh_finish("移动超时，测试中止", error=True)
 
     def _on_stop(self) -> None:
         if not self._running:
@@ -634,8 +678,15 @@ class IntegrationTestTab(QWidget):
             if self._phase == "rh_moving":
                 if not status.is_running and status.position == self._rh_move_target:
                     self._rh_timer.stop()
-                    self._rh_need_setup = False  # D: 基准(回零+偏移)已就绪
+                    self._rh_need_setup = False  # D/E: 基准已就绪
                     self._rh_begin_cycle()
+            elif self._phase == "rh_hole_moving":
+                if not status.is_running and status.position == self._rh_move_target:
+                    self._rh_timer.stop()
+                    if self._rh_hole_idx >= self._RH_HOLE_MOVES:
+                        self._rh_launch_offset_move()  # 孔位序列完成 → 移至偏移点
+                    else:
+                        self._rh_next_hole_move()
             return
         if not self._running:
             return
@@ -651,9 +702,13 @@ class IntegrationTestTab(QWidget):
             self._rh_cycle_finished(True)
             return
         if self._rh_running and self._phase == "rh_setup_homing":
-            # D: 基准回零成功, 移到偏移点(不计数)
+            # 基准回零成功(不计数): D 移到偏移点, E 开始孔位序列
             self._rh_timer.stop()
-            self._rh_launch_offset_move()
+            if self._rh_op == "holes":
+                self._rh_need_setup = False
+                self._rh_start_hole_sequence()
+            else:
+                self._rh_launch_offset_move()
             return
         if not self._running or self._phase != "homing":
             return
