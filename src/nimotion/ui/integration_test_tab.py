@@ -7,6 +7,7 @@ import time
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QIntValidator
 from PyQt5.QtWidgets import (
+    QComboBox,
     QDoubleSpinBox,
     QGroupBox,
     QHBoxLayout,
@@ -63,10 +64,17 @@ class IntegrationTestTab(QWidget):
     - 回零步：软件回零（HomeSearch.start_homing，与测距前2步同协议同参数，
       边沿设零+夹持），等 homed 信号后进入下一步。
 
-    另含「连续回零测试」（2026-10-13 压测 A 区协议固化）：回零 → 移开固定
-    偏移 → 再回零循环，统计成功率、边沿距离极差（=重复性，固定起点下
+    另含「连续回零测试」（2026-10-13 压测 A/B 区协议固化）：回零 → 移开
+    固定偏移 → 再回零循环，统计成功率、边沿距离极差（=重复性，固定起点下
     HomeSearch.last_edge_distance 的离散度）与平均耗时。失败不中断，
     记录后继续下一轮。与循环测试互斥。
+
+    测试项目预设:
+    - A 短距重复性(偏移+800): 起点在感应窗口正侧前方, sweep 短距即触发,
+      考察重复定位精度
+    - B 整圈扫描漏窗(偏移-100): 起点在窗口负侧, sweep 必须扫完整圈才再次
+      进窗——专项考察 SWEEP_SPEED=150 下穿窗仅≈1 个轮询周期的漏检率
+      (漏检表现为"行程内未找到感应点"失败, 计入成功率统计)
     """
 
     _POLL_INTERVAL_MS = 500  # 状态轮询周期
@@ -217,6 +225,13 @@ class IntegrationTestTab(QWidget):
         rl.addWidget(rh_desc)
 
         rh_row = QHBoxLayout()
+        rh_row.addWidget(QLabel("项目:"))
+        self._rh_mode_combo = QComboBox()
+        self._rh_mode_combo.addItem("A 短距重复性(+800)", 800)
+        self._rh_mode_combo.addItem("B 整圈扫描漏窗(-100)", -100)
+        self._rh_mode_combo.addItem("自定义", None)
+        self._rh_mode_combo.currentIndexChanged.connect(self._on_rh_mode_changed)
+        rh_row.addWidget(self._rh_mode_combo)
         rh_row.addWidget(QLabel("次数:"))
         self._rh_count_edit = QLineEdit("30")
         self._rh_count_edit.setValidator(QIntValidator(1, 9999, self))
@@ -224,10 +239,11 @@ class IntegrationTestTab(QWidget):
         rh_row.addWidget(self._rh_count_edit)
         rh_row.addWidget(QLabel("偏移:"))
         self._rh_offset_edit = QLineEdit("800")
-        self._rh_offset_edit.setValidator(QIntValidator(0, 20000, self))
+        self._rh_offset_edit.setValidator(QIntValidator(-20000, 20000, self))
         self._rh_offset_edit.setFixedWidth(80)
+        self._rh_offset_edit.setEnabled(False)  # 预设项目锁定, 选"自定义"可编辑
         rh_row.addWidget(self._rh_offset_edit)
-        rh_row.addWidget(QLabel("脉冲（0 = 原地连发）"))
+        rh_row.addWidget(QLabel("脉冲（正=窗口正侧短距，负=负侧整圈，0=原地连发）"))
         rh_row.addStretch()
         rl.addLayout(rh_row)
 
@@ -303,6 +319,14 @@ class IntegrationTestTab(QWidget):
 
     # -- 连续回零测试 --
 
+    def _on_rh_mode_changed(self) -> None:
+        preset = self._rh_mode_combo.currentData()
+        if preset is None:
+            self._rh_offset_edit.setEnabled(True)
+        else:
+            self._rh_offset_edit.setText(str(preset))
+            self._rh_offset_edit.setEnabled(False)
+
     def _on_rh_start(self) -> None:
         if self._running or self._rh_running:
             return
@@ -370,7 +394,7 @@ class IntegrationTestTab(QWidget):
             self._rh_ok += 1
             self._rh_durs.append(duration)
             # 仅"上一轮成功且从偏移点出发"的轮次计入重复性样本
-            if self._rh_prev_ok and self._rh_offset > 0 and self._rh_done > 1:
+            if self._rh_prev_ok and self._rh_offset != 0 and self._rh_done > 1:
                 self._rh_dists.append(self._homer.last_edge_distance)
         else:
             self._rh_fail_reasons.append(reason)
@@ -380,8 +404,8 @@ class IntegrationTestTab(QWidget):
         if self._rh_done >= self._rh_target:
             self._rh_finish("测试完成")
             return
-        if ok and self._rh_offset > 0:
-            # 移到偏移点作为下一轮固定起点
+        if ok and self._rh_offset != 0:
+            # 移到偏移点作为下一轮固定起点(正=窗口正侧短距, 负=负侧整圈)
             self._phase = "rh_wait_start"
             self._rh_timer.start(self._MOVE_TIMEOUT_MS)
             self._motor.move_relative(self._rh_offset)
