@@ -1,29 +1,55 @@
 """软件测距/软件回零控制器(共用同一状态机与参数，经理要求协议一致)。
 
 **测距模式**：每次测量前把当前位置计数**清 0**(设置零点 0x0047) →
-**sweep**: 速度模式低速负向连续运动，上位机周期轮询 DI 电平，见触发立即
-减速停机(停在窗口内或刚越过) → **backoff**: 回退释放开关 → **fine**:
-细步逼近取精确触发点(窗口正侧边沿) → (可选)返回起点。清 0 后触发点为
+**sweep**: 速度模式高速负向连续扫描，上位机周期轮询 DI 电平，见触发立即
+减速停机(150 速度下停点必已越过整个感应窗口) → **creep**: 低速正向反查，
+见触发立即停机，停点即感应窗口负侧边沿 → (可选)返回起点。清 0 后边沿为
 负值，距离取其绝对值。
 
-**回零模式**(start_homing)：与测距前 3 步完全相同(sweep → backoff →
-fine，同参数)，fine 找到边沿后**就地设零**建立 home 基准，随后保持使能
-夹持(hold_position_clamp)停在 home 点。不使用驱动器内置回零，回零与测距
-的边沿检测工况因此完全一致。注: home 重复精度 = 细搜步长量化(±FINE_STEP)。
+**回零模式**(start_homing)：与测距前 2 步完全相同(sweep → creep，同参数)，
+creep 停点**就地设零**建立 home 基准，随后保持使能夹持(hold_position_clamp)
+停在 home 点。不使用驱动器内置回零，回零与测距的边沿检测工况因此完全一致。
 
-防走样约束: 感应窗口实测仅约 50 脉冲宽(home 边沿起 -10~-55, ≈2°转盘)。
-sweep 速度必须满足 窗口穿越时间 ≥ 2×轮询周期，否则两次轮询之间会整个跨过
-窗口。SWEEP_SPEED=60 Step/s(×16=960 pulses/s) → 穿越 52ms ≥ 2~3 个 20ms
-轮询周期。若产品批次窗口更窄需相应降速(或缩短 POLL_MS)。另: 停车距离
-(29脉冲)+检测滞后(20)最深 49 脉冲 < BACKOFF(60)，回退后必在边沿上方。
+2026-10-12 经理改版: 取消 backoff 回退与 FINE_STEP 细步逼近，改为 creep
+低速连续反查；sweep 60→150。home 基准从窗口正侧边沿移到**负侧边沿**(两者
+相距约一个窗口宽≈50脉冲)，**部署本版后必须重新标定孔位**。
+精度: creep 7 Step/s(×16=112 pulses/s)，轮询量化 20ms≈2.2脉冲+低速停车
+距离<1脉冲 → 重复精度约 ±3 脉冲(旧细搜 FINE_STEP=2 为 ±2)。
+
+防走样风险(待真机复验): 感应窗口实测仅约 50 脉冲宽(≈2°转盘)。SWEEP_SPEED=
+150(×16=2400 pulses/s) → 穿越窗口仅 21ms ≈ 1.05 个 20ms 轮询周期，低于
+"穿越时间≥2×轮询周期"的安全下限，存在两次轮询之间整窗跨过的漏检可能——
+漏检表现为扫满行程报"行程内未找到感应点"，重试一次通常可过(相位随机)。
+creep 阶段 112 pulses/s 穿窗 446ms，无此问题。
+
+sweep 停点验算: 检测滞后(≤48脉冲)+停车距离(∝v², 按60时29折算≈181)最深约
+230 脉冲，必已越过整个窗口(50)，故 creep 反查起点处 DI 应为释放态；若起点
+仍在感应区内(异常)则快失败请重试。sweep 采用"先见释放帧才认触发"(armed)
+判定——起点恰在窗口内时会多扫一圈从窗口正侧重新进入，保证停点几何一致。
 
 注: DI1 常驻"原点开关"配置，搜索只读取 DI 电平，不改 DI 功能。设计要求
 homing 传感器严禁配成限位(转盘无限位，自研固件会报 FF0E 超负限位故障)。
 
-搜索期间临时把最大速度(0x005B)降为 SEARCH_SPEED(先读原值，结束/失败恢复)，
-作用于回退/细搜/返回的点动精度；sweep 用速度模式目标速度(0x0055)，独立设置。
-细搜阶段另临时把加速度(0x005F)降为 FINE_ACCEL 软化微步逼近(2026-07-28 经理
-定值)，转 returning 或结束时恢复原值；减速度(0x0061)不动。
+点动仅剩测距的返回起点一步: 返回前临时把最大速度(0x005B)降为 SEARCH_SPEED
+(prepare 先读原值，结束/失败恢复)。0x005B 对速度模式同样钳速，故 sweep/creep
+期间不降速(SWEEP_SPEED 150 > SEARCH_SPEED 60 会被钳)。
+
+creep 前另临时把加速度(0x005F)降为 CREEP_ACCEL=10(2026-10-12 经理定值,
+sweep 阶段保持全局值 1000 不受影响)，转 returning(长行程不必低加速度)或
+结束时恢复原值；减速度(0x0061)不动，creep 触发停机仍按全局减速度急停。
+
+重要: 最小速度(0x005D, 起停速度, 初始化定值 16)对目标速度**托底**——目标
+低于它时实际按它运行，此前 creep 10/4/2 实际都被托在 16(2026-10-12 真机
+发现, 反查耗时/声音均无变化)。故 creep 前同须临时把 0x005D 降为
+CREEP_SPEED，恢复时机同加速度(全局起停速度不可长期改小, 会拖慢转盘定位
+起步并进入超低速共振区)。
+
+降噪: creep 前另把加速/运行电流(0x0017/0x0018)临时降为 CREEP_CURRENT=38
+(≈1.2A, 电机额定, 2026-10-13 经理真机调音定值 38→58→28→38)——全局 95≈3A
+的超流驱动是带载高速不丢步的刚需, creep 近零负载低速段超流只产生电磁
+噪声, 额定电流对 7 Step/s 反查扭矩充裕。电流不足的失败模式安全: 电机
+停转→DI 不触发→反查限程报错重试, 不会错设零点(边沿判定看物理感应信号)。
+恢复时机同其余 creep 临时参数(returning/结束/失败)。
 
 异常快失败: 任一状态帧带报警码(如欠压 3120)立即停机报错，不傻等看门狗。
 """
@@ -38,6 +64,9 @@ from .motor_service import MotorService
 
 _MAX_SPEED_ADDR = 0x005B        # 最大速度(UINT32, Step/s)
 _ACCEL_ADDR = 0x005F            # 加速度(UINT32, Step/s²)
+_MIN_SPEED_ADDR = 0x005D        # 最小速度/起停速度(UINT32, Step/s), 对目标速度托底
+_ACCEL_CURRENT_ADDR = 0x0017    # 加速电流(UINT16, ≈31.6mA/单位)
+_RUN_CURRENT_ADDR = 0x0018      # 运行电流(UINT16, ≈31.6mA/单位)
 
 
 class HomeSearch(QObject):
@@ -48,22 +77,29 @@ class HomeSearch(QObject):
     homed = pyqtSignal()         # 软件回零完成: 已在边沿设零并夹持
     failed = pyqtSignal(str)     # 失败原因(两种模式共用)
 
-    SWEEP_SPEED = 60             # sweep 连续扫描速度(Step/s)，见模块注释防走样约束
-                                 # (2026-07-28 经理定值 50→60)
-    POLL_MS = 20                 # sweep 期间状态轮询周期(2026-07-28 经理定值 25→20)
-    FINE_STEP = 2                # 细搜步长(脉冲)，决定最终精度
-    BACKOFF = 60                 # 触发后回退步长(释放开关)。停点最深在边沿下方
-                                 # ~40脉冲(轮询量化20+停车距离20)，60一次可出窗，
-                                 # 循环兜底；取小减少细搜空走步数(2026-07-28 经理定值 90→60)
+    SWEEP_SPEED = 150            # sweep 连续扫描速度(Step/s)，见模块注释防走样风险
+                                 # (2026-10-12 经理定值 80→150, 穿窗21ms≈1.05轮询
+                                 # 周期低于2×下限, 漏检重试兜底, 待真机复验)
+    CREEP_SPEED = 7              # creep 反查速度(Step/s)，决定边沿定位精度(≈±3脉冲)
+                                 # (2026-10-12 经理定值 10→4→2→5→7, 取代原细搜
+                                 # FINE_STEP 逐步逼近)。creep 期间 0x005D 同步降为
+                                 # 此值, 否则被最小速度 16 托底不生效
+    CREEP_ACCEL = 10             # creep 阶段临时加速度(Step/s², 2026-10-12 经理定值
+                                 # 100→10, 起步斜坡 0.7s/约39脉冲; 停机走减速度
+                                 # 0x0061 不受影响)
+    CREEP_CURRENT = 38           # creep 阶段临时加速/运行电流(≈31.6mA/单位, 38≈1.2A
+                                 # 电机额定, 2026-10-13 经理真机调音定值 38→58→28→38,
+                                 # 目标=降噪)——近零负载低速段退出 3A 超流, 结束恢复
+    POLL_MS = 20                 # sweep/creep 期间状态轮询周期(2026-07-28 经理定值 25→20)
     MAX_TRAVEL = 10000           # 默认搜索行程上限(>默认齿轮比下转盘一圈 8800)；
                                  # 齿轮比可配置后调用方按实际一圈脉冲经 start()/
                                  # start_homing() 的 max_travel 参数传入覆盖
-    FINE_TRAVEL_LIMIT = 200      # 细搜行程上限(回退60+窗口50+裕量)，防误触发后无限细搜
-    SETTLE_MARGIN_MS = 300       # 单步整定裕量
-    STOP_SETTLE_MS = 400         # sweep 触发停机后的整定时间
+    CREEP_TRAVEL_LIMIT = 600     # creep 反查行程上限(停点最深~230+窗口50+裕量)，
+                                 # 防触发信号异常后无限爬行
+    SETTLE_MARGIN_MS = 300       # 单步整定裕量(返回起点用)
+    STOP_SETTLE_MS = 400         # sweep/creep 触发停机后的整定时间
     OVERALL_TIMEOUT_MS = 120000  # 总看门狗
-    SEARCH_SPEED = 60            # 点动阶段临时最大速度(Step/s)
-    FINE_ACCEL = 50              # 细搜阶段临时加速度(Step/s², 2026-07-28 经理定值 990→50)
+    SEARCH_SPEED = 60            # 返回起点时临时最大速度(Step/s)
     PREPARE_TIMEOUT_MS = 3000    # 读取原最大速度/加速度超时
 
     def __init__(
@@ -75,20 +111,28 @@ class HomeSearch(QObject):
         # 原点开关(DI1)极性取反：默认 False=旧逻辑(高电平触发)。
         # 新物镜转换器感应逻辑可能相反，由 GUI 设置项读写本机配置传入。
         self._invert_di = invert_di
-        # idle/prepare/sweep/stopping/backoff/fine/returning
+        # idle/prepare/sweep/stopping/creep/creep_stopping/returning
         self._phase = "idle"
         self._settling = False
-        self._awaiting = False   # 点动阶段: 本整定周期是否还需处理一次状态
+        self._awaiting = False   # returning 点动: 本整定周期是否还需处理一次状态
         self._sweeping = False   # sweep 阶段: 连续运动是否已启动
-        self._fine_travel = 0
+        self._armed = False      # sweep: 已见过释放帧，触发判定生效(起点在窗口内兜底)
+        self._creeping = False   # creep 阶段: 反查运动是否已启动
+        self._creep_start = 0    # creep 起点位置(行程保护基准)
         self._measured = 0
         self._return_to_start = True
         self._mode = "measure"   # measure=测距 / home=软件回零
         self._pps = 480
         self._max_travel = self.MAX_TRAVEL  # 实际行程上限，_begin 时可被覆盖
         self._orig_speed: int | None = None  # 搜索前的最大速度，结束后恢复
-        self._orig_accel: int | None = None  # 搜索前的加速度，细搜降 200 后恢复
-        self._accel_lowered = False          # 细搜临时加速度是否已写入
+        self._speed_lowered = False          # 0x005B 是否已降为 SEARCH_SPEED
+        self._orig_accel: int | None = None  # 搜索前的加速度，creep 降低后恢复
+        self._accel_lowered = False          # creep 临时加速度是否已写入
+        self._orig_min_speed: int | None = None  # 搜索前的最小速度(起停速度)
+        self._min_speed_lowered = False      # creep 临时最小速度是否已写入
+        self._orig_accel_cur: int | None = None  # 搜索前的加速电流
+        self._orig_run_cur: int | None = None    # 搜索前的运行电流
+        self._current_lowered = False        # creep 临时电流是否已写入
         self._prepare_reads: dict[int, int] = {}
 
         self._settle_timer = QTimer(self)
@@ -107,6 +151,14 @@ class HomeSearch(QObject):
     def running(self) -> bool:
         return self._phase != "idle"
 
+    @property
+    def last_edge_distance(self) -> int:
+        """最近一次搜索 creep 触发点距起点的距离(脉冲, 正值)。
+
+        home 模式同样记录——固定起点连续回零时, 该值的离散度即回零重复性。
+        """
+        return self._measured
+
     def cancel(self) -> None:
         """中止搜索(如设备断连)，还原状态，不发 finished/failed。"""
         if self._phase != "idle":
@@ -118,9 +170,9 @@ class HomeSearch(QObject):
         return_to_start: bool = True,
         max_travel: int | None = None,
     ) -> None:
-        """开始测量：清 0 → sweep → 回退 → 细搜 → (可选)返回起点。
+        """开始测量：清 0 → sweep → creep 反查 → (可选)返回起点。
 
-        pulses_per_sec 用于按步长动态估算点动整定时长(建议传 最大速度×细分数)。
+        pulses_per_sec 用于按步长动态估算返回起点的整定时长(建议传 最大速度×细分数)。
         max_travel 覆盖搜索行程上限(建议传 转盘一圈脉冲+裕量)，None 用默认。
         """
         self._invert_di = load_di_invert()  # 每次启动读取最新本机配置
@@ -129,9 +181,9 @@ class HomeSearch(QObject):
     def start_homing(
         self, pulses_per_sec: int = 480, max_travel: int | None = None
     ) -> None:
-        """软件回零：sweep → 回退 → 细搜到边沿 → 就地设零 → 夹持。
+        """软件回零：sweep → creep 反查到边沿 → 就地设零 → 夹持。
 
-        与测距前 3 步协议/参数完全一致(经理要求)，完成发 homed 信号。
+        与测距前 2 步协议/参数完全一致(经理要求)，完成发 homed 信号。
         """
         self._invert_di = load_di_invert()  # 每次启动读取最新本机配置
         self._begin(pulses_per_sec, False, "home", max_travel)
@@ -152,17 +204,25 @@ class HomeSearch(QObject):
         self._pps = max(int(pulses_per_sec), 1)
         self._return_to_start = return_to_start
         self._measured = 0
-        self._fine_travel = 0
         self._sweeping = False
+        self._armed = False
+        self._creeping = False
+        self._creep_start = 0
         self._orig_speed = None
+        self._speed_lowered = False
         self._orig_accel = None
         self._accel_lowered = False
+        self._orig_min_speed = None
+        self._min_speed_lowered = False
+        self._orig_accel_cur = None
+        self._orig_run_cur = None
+        self._current_lowered = False
         self._prepare_reads = {}
         # 先停机(写参数需停机)；DI 配置不动(DI1 常驻原点开关，只读电平)
         self._motor.disable()
         # 当前位置计数清 0
         self._motor.set_zero()
-        # 读当前最大速度/加速度(结束后恢复)，读齐后临时降速再进入 sweep
+        # 读当前最大速度/加速度(临时改用、结束后恢复)，读齐后进入 sweep
         self._phase = "prepare"
         self._settling = False
         self._awaiting = False
@@ -170,23 +230,31 @@ class HomeSearch(QObject):
         self._settle_timer.start(self.PREPARE_TIMEOUT_MS)  # 读取超时兜底
         self._motor.read_param(_MAX_SPEED_ADDR, 2)
         self._motor.read_param(_ACCEL_ADDR, 2)
+        self._motor.read_param(_MIN_SPEED_ADDR, 2)
+        self._motor.read_param(_ACCEL_CURRENT_ADDR, 1)
+        self._motor.read_param(_RUN_CURRENT_ADDR, 1)
 
     # -- 内部 --
 
     def _on_param_read(self, addr: int, value: int) -> None:
-        if self._phase != "prepare" or addr not in (_MAX_SPEED_ADDR, _ACCEL_ADDR):
+        if self._phase != "prepare" or addr not in (
+            _MAX_SPEED_ADDR, _ACCEL_ADDR, _MIN_SPEED_ADDR,
+            _ACCEL_CURRENT_ADDR, _RUN_CURRENT_ADDR,
+        ):
             return
         self._prepare_reads[addr] = value
-        if len(self._prepare_reads) < 2:
+        if len(self._prepare_reads) < 5:
             return
         self._settle_timer.stop()
         self._orig_speed = self._prepare_reads[_MAX_SPEED_ADDR]
         self._orig_accel = self._prepare_reads[_ACCEL_ADDR]
-        if self._orig_speed != self.SEARCH_SPEED:
-            self._motor.write_param_32bit(_MAX_SPEED_ADDR, self.SEARCH_SPEED)
-        # 进入 sweep，先取首帧状态(覆盖起点已在窗口内的情况)
+        self._orig_min_speed = self._prepare_reads[_MIN_SPEED_ADDR]
+        self._orig_accel_cur = self._prepare_reads[_ACCEL_CURRENT_ADDR]
+        self._orig_run_cur = self._prepare_reads[_RUN_CURRENT_ADDR]
+        # 此处不降 0x005B——它对速度模式同样钳速(会把 sweep/creep 钳到
+        # SEARCH_SPEED)，降速推迟到返回起点前(_lower_speed_for_return)
+        # 进入 sweep，先取首帧状态(决定触发判定是否需要先见释放帧)
         self._phase = "sweep"
-        self._awaiting = True
         self._motor.refresh_status()
 
     def _settle_for(self, step: int) -> int:
@@ -199,32 +267,81 @@ class HomeSearch(QObject):
         self._motor.move_relative(step)
         self._settle_timer.start(self._settle_for(step))
 
-    def _lower_accel_for_fine(self) -> None:
-        """细搜前临时降加速度(0x005F)软化微步逼近，转 returning/结束时恢复。"""
-        if self._orig_accel is not None and self._orig_accel != self.FINE_ACCEL:
-            self._motor.write_param_32bit(_ACCEL_ADDR, self.FINE_ACCEL)
-            self._accel_lowered = True
+    def _lower_speed_for_return(self) -> None:
+        """返回起点前临时降最大速度(此刻电机已停，sweep/creep 期间不可降)。"""
+        if self._orig_speed is not None and self._orig_speed != self.SEARCH_SPEED:
+            self._motor.write_param_32bit(_MAX_SPEED_ADDR, self.SEARCH_SPEED)
+            self._speed_lowered = True
 
-    def _restore_accel(self) -> None:
+    def _lower_params_for_creep(self) -> None:
+        """creep 前临时降加速度/最小速度/电流，转 returning/结束时恢复。
+
+        最小速度对目标速度托底(初始值 16 会把 CREEP_SPEED 托回 16)，必须随降；
+        加速/运行电流退出 3A 超流(降为电机额定 1.2A)以降噪。
+        """
+        if self._orig_accel is not None and self._orig_accel != self.CREEP_ACCEL:
+            self._motor.write_param_32bit(_ACCEL_ADDR, self.CREEP_ACCEL)
+            self._accel_lowered = True
+        if self._orig_min_speed is not None and self._orig_min_speed != self.CREEP_SPEED:
+            self._motor.write_param_32bit(_MIN_SPEED_ADDR, self.CREEP_SPEED)
+            self._min_speed_lowered = True
+        if self._orig_accel_cur is not None and self._orig_run_cur is not None and (
+            self._orig_accel_cur != self.CREEP_CURRENT
+            or self._orig_run_cur != self.CREEP_CURRENT
+        ):
+            self._motor.write_param(_ACCEL_CURRENT_ADDR, self.CREEP_CURRENT)
+            self._motor.write_param(_RUN_CURRENT_ADDR, self.CREEP_CURRENT)
+            self._current_lowered = True
+
+    def _restore_creep_params(self) -> None:
         if self._accel_lowered and self._orig_accel is not None:
             self._motor.write_param_32bit(_ACCEL_ADDR, self._orig_accel)
         self._accel_lowered = False
+        if self._min_speed_lowered and self._orig_min_speed is not None:
+            self._motor.write_param_32bit(_MIN_SPEED_ADDR, self._orig_min_speed)
+        self._min_speed_lowered = False
+        if self._current_lowered:
+            if self._orig_accel_cur is not None:
+                self._motor.write_param(_ACCEL_CURRENT_ADDR, self._orig_accel_cur)
+            if self._orig_run_cur is not None:
+                self._motor.write_param(_RUN_CURRENT_ADDR, self._orig_run_cur)
+        self._current_lowered = False
 
     def _on_settle_done(self) -> None:
         if self._phase == "prepare":
             self._fail("读取最大速度/加速度超时")
             return
         if self._phase == "stopping":
-            # sweep 停机整定完毕，开始回退
-            self._phase = "backoff"
-            self._jog(+self.BACKOFF)
+            # sweep 停机整定完毕，降加速度/最小速度后进入低速反查
+            # (先取首帧确认已出感应区)
+            self._lower_params_for_creep()
+            self._phase = "creep"
+            self._motor.refresh_status()
             return
+        if self._phase == "creep_stopping":
+            # creep 触发停机整定完毕: 停点即感应窗口负侧边沿
+            if self._mode == "home":
+                # 就地设零建立 home 基准，保持使能夹持停在 home 点
+                self._motor.set_zero()
+                self._finish_home()
+            elif self._return_to_start:
+                self._phase = "returning"
+                self._restore_creep_params()  # 返回长行程不必用 creep 低加速度/低起停
+                self._lower_speed_for_return()
+                self._jog(+self._measured)
+            else:
+                self._finish()
+            return
+        # returning 点动整定结束
         self._settling = False
         self._awaiting = True
         self._motor.refresh_status()  # 主动取一帧最新状态来推进
 
     def _on_status(self, status: MotorStatus) -> None:
-        if self._phase in ("idle", "prepare", "stopping") or self._settling:
+        if (
+            self._phase in ("idle", "prepare", "stopping", "creep_stopping")
+            or self._settling
+        ):
             return
         # 报警快失败(欠压/过流等会中断运动，等看门狗无意义)
         if status.alarm_code != 0:
@@ -239,61 +356,58 @@ class HomeSearch(QObject):
         if self._phase == "sweep":
             self.progress.emit(pos)
             if not self._sweeping:
-                # 首帧: 起点已在窗口内则直接回退，否则启动连续扫描
-                if triggered:
-                    self._phase = "backoff"
-                    self._jog(+self.BACKOFF)
-                else:
-                    self._sweeping = True
-                    self._motor.set_speed(self.SWEEP_SPEED, 0)  # 0=反转(负向)
-                    self._poll_timer.start()
+                # 首帧: 起点已在窗口内则先见释放帧才认触发(多扫一圈兜底)，
+                # 保证停点总是从窗口正侧越入、几何一致
+                self._sweeping = True
+                self._armed = not triggered
+                self._motor.set_speed(self.SWEEP_SPEED, 0)  # 0=反转(负向)
+                self._poll_timer.start()
                 return
-            if triggered:
+            if not triggered:
+                self._armed = True
+            elif self._armed:
                 self._poll_timer.stop()
-                self._motor.stop()  # 减速停机(0x0007)
+                self._motor.stop()  # 减速停机(0x0007)，停点已越过整个窗口
                 self._phase = "stopping"
                 self._settle_timer.start(self.STOP_SETTLE_MS)
-            elif abs(pos) > self._max_travel:
+                return
+            if abs(pos) > self._max_travel:
                 self._poll_timer.stop()
                 self._motor.stop()
                 self._fail("行程内未找到感应点(方向/接线?)")
             return
 
-        # 点动阶段: 每个整定周期只处理一次，防其它来源的状态刷新重复发步
+        if self._phase == "creep":
+            self.progress.emit(pos)
+            if not self._creeping:
+                # 首帧: 正常情况 sweep 停点已越过窗口，DI 应为释放态
+                if triggered:
+                    self._fail("sweep 停点仍在感应区内(停车距离异常)，请重试")
+                    return
+                self._creeping = True
+                self._creep_start = pos
+                self._motor.set_speed(self.CREEP_SPEED, 1)  # 1=正转(反向回查)
+                self._poll_timer.start()
+                return
+            if triggered:
+                # 迎到负侧边沿，立即停机(低速停车距离≈1脉冲)
+                self._poll_timer.stop()
+                self._motor.stop()
+                self._measured = -pos       # 清 0 后边沿为负，距离取正
+                self._phase = "creep_stopping"
+                self._settle_timer.start(self.STOP_SETTLE_MS)
+            elif abs(pos - self._creep_start) > self.CREEP_TRAVEL_LIMIT:
+                self._poll_timer.stop()
+                self._motor.stop()
+                self._fail("反查未找到感应点(触发信号异常?)")
+            return
+
+        # returning 点动: 每个整定周期只处理一次，防其它来源的状态刷新重复推进
         if not self._awaiting:
             return
         self._awaiting = False
         self.progress.emit(pos)
-
-        if self._phase == "backoff":
-            if triggered:
-                self._jog(+self.BACKOFF)   # 继续退回直到开关释放
-            else:
-                self._phase = "fine"
-                self._fine_travel = 0
-                self._lower_accel_for_fine()
-                self._jog(-self.FINE_STEP)
-        elif self._phase == "fine":
-            if triggered:
-                if self._mode == "home":
-                    # 就地设零建立 home 基准，保持使能夹持停在 home 点
-                    self._motor.set_zero()
-                    self._finish_home()
-                    return
-                self._measured = -pos       # 清 0 后触发点为负，距离取正
-                if self._return_to_start:
-                    self._phase = "returning"
-                    self._restore_accel()   # 返回长行程不必用细搜低加速度
-                    self._jog(+self._measured)
-                else:
-                    self._finish()
-            else:
-                self._fine_travel += self.FINE_STEP
-                if self._fine_travel > self.FINE_TRAVEL_LIMIT:
-                    self._fail("细搜未找到感应点(触发信号异常?)")
-                else:
-                    self._jog(-self.FINE_STEP)
-        elif self._phase == "returning":
+        if self._phase == "returning":
             self._finish()
 
     def _finish(self) -> None:
@@ -315,12 +429,17 @@ class HomeSearch(QObject):
         self._poll_timer.stop()
         self._watchdog.stop()
         self._motor.disable()                                   # 脱机(写参数需停机)
-        if self._orig_speed is not None and self._orig_speed != self.SEARCH_SPEED:
+        if self._speed_lowered and self._orig_speed is not None:
             self._motor.write_param_32bit(_MAX_SPEED_ADDR, self._orig_speed)
-        self._restore_accel()
+        self._restore_creep_params()
+        self._speed_lowered = False
         self._orig_speed = None
         self._orig_accel = None
+        self._orig_min_speed = None
+        self._orig_accel_cur = None
+        self._orig_run_cur = None
         self._phase = "idle"
         self._settling = False
         self._awaiting = False
         self._sweeping = False
+        self._creeping = False
