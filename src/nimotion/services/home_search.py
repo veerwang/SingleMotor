@@ -151,6 +151,14 @@ class HomeSearch(QObject):
     def running(self) -> bool:
         return self._phase != "idle"
 
+    @property
+    def last_edge_distance(self) -> int:
+        """最近一次搜索 creep 触发点距起点的距离(脉冲, 正值)。
+
+        home 模式同样记录——固定起点连续回零时, 该值的离散度即回零重复性。
+        """
+        return self._measured
+
     def cancel(self) -> None:
         """中止搜索(如设备断连)，还原状态，不发 finished/failed。"""
         if self._phase != "idle":
