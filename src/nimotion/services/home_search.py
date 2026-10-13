@@ -44,6 +44,12 @@ sweep 阶段保持全局值 1000 不受影响)，转 returning(长行程不必�
 CREEP_SPEED，恢复时机同加速度(全局起停速度不可长期改小, 会拖慢转盘定位
 起步并进入超低速共振区)。
 
+降噪: creep 前另把加速/运行电流(0x0017/0x0018)临时降为 CREEP_CURRENT=38
+(≈1.2A, 电机额定, 2026-10-13 经理定值)——全局 95≈3A 的超流驱动是带载高速
+不丢步的刚需, 但 creep 近零负载低速段超流只产生电磁噪声; 1.2A 额定对
+7 Step/s 反查扭矩充裕, 若异常堵转表现为反查限程失败可重试。恢复时机同
+其余 creep 临时参数(returning/结束/失败)。
+
 异常快失败: 任一状态帧带报警码(如欠压 3120)立即停机报错，不傻等看门狗。
 """
 
@@ -58,6 +64,8 @@ from .motor_service import MotorService
 _MAX_SPEED_ADDR = 0x005B        # 最大速度(UINT32, Step/s)
 _ACCEL_ADDR = 0x005F            # 加速度(UINT32, Step/s²)
 _MIN_SPEED_ADDR = 0x005D        # 最小速度/起停速度(UINT32, Step/s), 对目标速度托底
+_ACCEL_CURRENT_ADDR = 0x0017    # 加速电流(UINT16, ≈31.6mA/单位)
+_RUN_CURRENT_ADDR = 0x0018      # 运行电流(UINT16, ≈31.6mA/单位)
 
 
 class HomeSearch(QObject):
@@ -78,6 +86,9 @@ class HomeSearch(QObject):
     CREEP_ACCEL = 10             # creep 阶段临时加速度(Step/s², 2026-10-12 经理定值
                                  # 100→10, 起步斜坡 0.7s/约39脉冲; 停机走减速度
                                  # 0x0061 不受影响)
+    CREEP_CURRENT = 38           # creep 阶段临时加速/运行电流(≈31.6mA/单位, 38≈1.2A
+                                 # 电机额定, 2026-10-13 经理定值)——近零负载低速段
+                                 # 退出 3A 超流以降噪, 结束恢复
     POLL_MS = 20                 # sweep/creep 期间状态轮询周期(2026-07-28 经理定值 25→20)
     MAX_TRAVEL = 10000           # 默认搜索行程上限(>默认齿轮比下转盘一圈 8800)；
                                  # 齿轮比可配置后调用方按实际一圈脉冲经 start()/
@@ -118,6 +129,9 @@ class HomeSearch(QObject):
         self._accel_lowered = False          # creep 临时加速度是否已写入
         self._orig_min_speed: int | None = None  # 搜索前的最小速度(起停速度)
         self._min_speed_lowered = False      # creep 临时最小速度是否已写入
+        self._orig_accel_cur: int | None = None  # 搜索前的加速电流
+        self._orig_run_cur: int | None = None    # 搜索前的运行电流
+        self._current_lowered = False        # creep 临时电流是否已写入
         self._prepare_reads: dict[int, int] = {}
 
         self._settle_timer = QTimer(self)
@@ -191,6 +205,9 @@ class HomeSearch(QObject):
         self._accel_lowered = False
         self._orig_min_speed = None
         self._min_speed_lowered = False
+        self._orig_accel_cur = None
+        self._orig_run_cur = None
+        self._current_lowered = False
         self._prepare_reads = {}
         # 先停机(写参数需停机)；DI 配置不动(DI1 常驻原点开关，只读电平)
         self._motor.disable()
@@ -205,21 +222,26 @@ class HomeSearch(QObject):
         self._motor.read_param(_MAX_SPEED_ADDR, 2)
         self._motor.read_param(_ACCEL_ADDR, 2)
         self._motor.read_param(_MIN_SPEED_ADDR, 2)
+        self._motor.read_param(_ACCEL_CURRENT_ADDR, 1)
+        self._motor.read_param(_RUN_CURRENT_ADDR, 1)
 
     # -- 内部 --
 
     def _on_param_read(self, addr: int, value: int) -> None:
         if self._phase != "prepare" or addr not in (
-            _MAX_SPEED_ADDR, _ACCEL_ADDR, _MIN_SPEED_ADDR
+            _MAX_SPEED_ADDR, _ACCEL_ADDR, _MIN_SPEED_ADDR,
+            _ACCEL_CURRENT_ADDR, _RUN_CURRENT_ADDR,
         ):
             return
         self._prepare_reads[addr] = value
-        if len(self._prepare_reads) < 3:
+        if len(self._prepare_reads) < 5:
             return
         self._settle_timer.stop()
         self._orig_speed = self._prepare_reads[_MAX_SPEED_ADDR]
         self._orig_accel = self._prepare_reads[_ACCEL_ADDR]
         self._orig_min_speed = self._prepare_reads[_MIN_SPEED_ADDR]
+        self._orig_accel_cur = self._prepare_reads[_ACCEL_CURRENT_ADDR]
+        self._orig_run_cur = self._prepare_reads[_RUN_CURRENT_ADDR]
         # 此处不降 0x005B——它对速度模式同样钳速(会把 sweep/creep 钳到
         # SEARCH_SPEED)，降速推迟到返回起点前(_lower_speed_for_return)
         # 进入 sweep，先取首帧状态(决定触发判定是否需要先见释放帧)
@@ -243,9 +265,10 @@ class HomeSearch(QObject):
             self._speed_lowered = True
 
     def _lower_params_for_creep(self) -> None:
-        """creep 前临时降加速度(0x005F)与最小速度(0x005D)，转 returning/结束时恢复。
+        """creep 前临时降加速度/最小速度/电流，转 returning/结束时恢复。
 
-        最小速度对目标速度托底(初始值 16 会把 CREEP_SPEED 托回 16)，必须随降。
+        最小速度对目标速度托底(初始值 16 会把 CREEP_SPEED 托回 16)，必须随降；
+        加速/运行电流退出 3A 超流(降为电机额定 1.2A)以降噪。
         """
         if self._orig_accel is not None and self._orig_accel != self.CREEP_ACCEL:
             self._motor.write_param_32bit(_ACCEL_ADDR, self.CREEP_ACCEL)
@@ -253,6 +276,13 @@ class HomeSearch(QObject):
         if self._orig_min_speed is not None and self._orig_min_speed != self.CREEP_SPEED:
             self._motor.write_param_32bit(_MIN_SPEED_ADDR, self.CREEP_SPEED)
             self._min_speed_lowered = True
+        if self._orig_accel_cur is not None and self._orig_run_cur is not None and (
+            self._orig_accel_cur != self.CREEP_CURRENT
+            or self._orig_run_cur != self.CREEP_CURRENT
+        ):
+            self._motor.write_param(_ACCEL_CURRENT_ADDR, self.CREEP_CURRENT)
+            self._motor.write_param(_RUN_CURRENT_ADDR, self.CREEP_CURRENT)
+            self._current_lowered = True
 
     def _restore_creep_params(self) -> None:
         if self._accel_lowered and self._orig_accel is not None:
@@ -261,6 +291,12 @@ class HomeSearch(QObject):
         if self._min_speed_lowered and self._orig_min_speed is not None:
             self._motor.write_param_32bit(_MIN_SPEED_ADDR, self._orig_min_speed)
         self._min_speed_lowered = False
+        if self._current_lowered:
+            if self._orig_accel_cur is not None:
+                self._motor.write_param(_ACCEL_CURRENT_ADDR, self._orig_accel_cur)
+            if self._orig_run_cur is not None:
+                self._motor.write_param(_RUN_CURRENT_ADDR, self._orig_run_cur)
+        self._current_lowered = False
 
     def _on_settle_done(self) -> None:
         if self._phase == "prepare":
@@ -391,6 +427,8 @@ class HomeSearch(QObject):
         self._orig_speed = None
         self._orig_accel = None
         self._orig_min_speed = None
+        self._orig_accel_cur = None
+        self._orig_run_cur = None
         self._phase = "idle"
         self._settling = False
         self._awaiting = False

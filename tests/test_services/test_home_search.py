@@ -65,6 +65,9 @@ class FakeMotor(QObject):
         self.accel_writes: list[int] = []
         self.min_speed = 16
         self.min_speed_writes: list[int] = []
+        self.accel_cur = 95
+        self.run_cur = 95
+        self.current_writes: list[tuple[int, int]] = []
         self.respond_to_read = True
 
     def disable(self) -> None:
@@ -107,6 +110,10 @@ class FakeMotor(QObject):
             self.param_read.emit(addr, self.accel)
         elif addr == 0x005D:
             self.param_read.emit(addr, self.min_speed)
+        elif addr == 0x0017:
+            self.param_read.emit(addr, self.accel_cur)
+        elif addr == 0x0018:
+            self.param_read.emit(addr, self.run_cur)
 
     def write_param_32bit(self, addr: int, value: int, signed: bool = False) -> None:
         if addr == 0x002C:
@@ -120,6 +127,14 @@ class FakeMotor(QObject):
         elif addr == 0x005D:
             self.min_speed = value
             self.min_speed_writes.append(value)
+
+    def write_param(self, addr: int, value: int) -> None:
+        if addr == 0x0017:
+            self.accel_cur = value
+            self.current_writes.append((addr, value))
+        elif addr == 0x0018:
+            self.run_cur = value
+            self.current_writes.append((addr, value))
 
     def move_relative(self, step: int) -> None:
         self.jogs.append(step)
@@ -276,6 +291,12 @@ def test_creep_params_lowered_and_restored(app):
     assert fake.accel == 1000
     assert fake.min_speed_writes == [HomeSearch.CREEP_SPEED, 16]
     assert fake.min_speed == 16
+    # 加速/运行电流 creep 降为 1.2A(38)、返回前恢复 95
+    assert fake.current_writes == [
+        (0x0017, HomeSearch.CREEP_CURRENT), (0x0018, HomeSearch.CREEP_CURRENT),
+        (0x0017, 95), (0x0018, 95),
+    ]
+    assert (fake.accel_cur, fake.run_cur) == (95, 95)
 
     # 回零模式同样降/恢复(teardown 兜底恢复)
     fake2 = FakeMotor(sensor_pos=-500)
@@ -289,6 +310,7 @@ def test_creep_params_lowered_and_restored(app):
     assert fake2.accel == 1000
     assert fake2.min_speed_writes == [HomeSearch.CREEP_SPEED, 16]
     assert fake2.min_speed == 16
+    assert (fake2.accel_cur, fake2.run_cur) == (95, 95)  # 夹持前电流已恢复
 
 
 def test_fail_when_speed_read_times_out(app):
