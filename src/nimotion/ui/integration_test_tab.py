@@ -167,6 +167,8 @@ class IntegrationTestTab(QWidget):
 
         self._init_ui()
 
+        self._last_pos: int | None = None   # 最近一帧位置(超时诊断用)
+        self._last_running: bool | None = None
         self._motor.status_updated.connect(self._on_status_updated)
         self._motor.operation_done.connect(self._on_operation_done)
         self._motor._worker.disconnected.connect(self._on_disconnected)
@@ -596,9 +598,14 @@ class IntegrationTestTab(QWidget):
                 tag = "建立基准超时"
             self._rh_cycle_finished(False, tag)
         else:
-            # 偏移/孔位移动超时属硬件异常, 终止测试
+            # 偏移/孔位移动超时属硬件异常, 终止测试(带诊断现场)
             self._motor.stop()
-            self._rh_finish("移动超时，测试中止", error=True)
+            self._rh_finish(
+                f"移动超时，测试中止（阶段={self._phase} "
+                f"目标={self._rh_move_target} 位置={self._last_pos} "
+                f"运行中={self._last_running}）",
+                error=True,
+            )
 
     def _on_stop(self) -> None:
         if not self._running:
@@ -674,6 +681,8 @@ class IntegrationTestTab(QWidget):
         self._begin_step()
 
     def _on_status_updated(self, status: MotorStatus) -> None:
+        self._last_pos = status.position
+        self._last_running = status.is_running
         if self._rh_running:
             if self._phase == "rh_moving":
                 if not status.is_running and status.position == self._rh_move_target:
