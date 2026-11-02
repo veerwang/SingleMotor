@@ -14,6 +14,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from ..models.app_config import load_di_invert, load_gear_ratio
 from ..models.turret import (
     BACKLASH_MAX_DEG,
     MICROSTEP_REG_ADDR,
@@ -28,7 +29,6 @@ from ..models.turret import (
     save_backlash_deg,
     save_calibration,
 )
-from ..models.app_config import load_di_invert, load_gear_ratio
 from ..models.types import MotorStatus
 from ..services.home_search import HomeSearch
 from ..services.motor_service import MotorService
@@ -165,6 +165,7 @@ class TurretPanel(QWidget):
         jog_layout = QHBoxLayout()
         jog_layout.addWidget(QLabel("步进:"))
         self._jog_step_spin = QSpinBox()
+        # 上限=每孔脉冲数，读到细分参数后按当前齿轮比在 _apply_gear_dependent_ui 更新
         self._jog_step_spin.setRange(1, 2200)
         self._jog_step_spin.setValue(self._DEFAULT_JOG_STEP)
         self._jog_step_spin.setSuffix(" pulse")
@@ -257,9 +258,8 @@ class TurretPanel(QWidget):
         # 同步：以位置1为基准，位置2/3/4 依次 +每孔脉冲(理论等分)
         sync_row = QHBoxLayout()
         self._sync_btn = QPushButton("同步")
-        self._sync_btn.setToolTip(
-            "以位置1标定值为基准，位置2/3/4 = 位置1 + n×每孔脉冲（如 1820 → 4020/6220/8420）"
-        )
+        # 提示中的每孔脉冲数在 _apply_gear_dependent_ui 按当前齿轮比/细分填入
+        self._sync_btn.setToolTip("以位置1标定值为基准，位置2/3/4 = 位置1 + n×每孔脉冲")
         self._sync_btn.setEnabled(False)  # 读取细分参数前禁用
         self._sync_btn.clicked.connect(self._on_sync)
         sync_row.addWidget(self._sync_btn)
@@ -453,7 +453,7 @@ class TurretPanel(QWidget):
             spin.setValue(effective[pos])
             spin.blockSignals(False)
         self._status_label.setText("")
-        self._update_backlash_label()
+        self._apply_gear_dependent_ui()
         self._update_controls()
 
     def _on_homing_done(self) -> None:
@@ -573,6 +573,36 @@ class TurretPanel(QWidget):
         self._status_label.setStyleSheet("color: #F44336;")
 
     # -- 辅助方法 --
+
+    def refresh_gear_ratio(self) -> None:
+        """齿轮比(本机配置)变更后刷新派生数据：未标定孔位按新比值重算理论值，
+        已标定孔位(turret_calibration.json 中存在)保持不变——换比后需重新标定或同步。
+        """
+        if self._microstep is None:
+            return
+        effective = effective_position_pulses(
+            self._microstep, self._calibration, load_gear_ratio()
+        )
+        for pos in _SLOTS:
+            if pos in self._calibration:
+                continue
+            spin = self._pos_spins[pos]
+            spin.blockSignals(True)
+            spin.setValue(effective[pos])
+            spin.blockSignals(False)
+        self._apply_gear_dependent_ui()
+
+    def _apply_gear_dependent_ui(self) -> None:
+        """按当前齿轮比/细分更新点动步进上限、同步提示与间隙补偿换算。"""
+        if self._microstep is None:
+            return
+        per_hole = calculate_pulses_per_position(self._microstep, load_gear_ratio())
+        self._jog_step_spin.setMaximum(max(1, per_hole))
+        self._sync_btn.setToolTip(
+            f"以位置1标定值为基准，位置2/3/4 = 位置1 + n×每孔脉冲"
+            f"（当前每孔 {per_hole} pulse）"
+        )
+        self._update_backlash_label()
 
     def _search_max_travel(self) -> int | None:
         """按当前齿轮比估算搜索行程上限：转盘一圈脉冲+裕量(默认比值下=10000)。"""

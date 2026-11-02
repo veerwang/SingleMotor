@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import (
     QCheckBox,
-    QComboBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -25,7 +25,7 @@ from ..models.app_config import (
     save_direction_inverted,
     save_gear_teeth,
 )
-from ..models.registers import HOLDING_REGISTERS, get_register
+from ..models.registers import get_register
 from ..models.types import DataType, RegisterType
 from ..services.motor_service import MotorService
 
@@ -112,6 +112,8 @@ class ParamWidget(QWidget):
 
 class MotorParamsPanel(QWidget):
     """参数设置子面板"""
+
+    gear_config_changed = pyqtSignal()  # 齿轮变比(本机配置)已修改并保存
 
     def __init__(self, motor_service: MotorService, parent=None) -> None:
         super().__init__(parent)
@@ -275,12 +277,13 @@ class MotorParamsPanel(QWidget):
             self._gear_turret_spin.value(), self._gear_motor_spin.value()
         )
         self._update_gear_ratio_label()
+        self.gear_config_changed.emit()
         self._set_status(
             f"齿轮变比已保存到本机: {self._gear_turret_spin.value()}"
             f"/{self._gear_motor_spin.value()}"
             f" = {self._gear_turret_spin.value() / self._gear_motor_spin.value():.4g}"
-            "（默认 132/48=2.75）。理论孔位/同步/间隙换算将按新比值计算；"
-            "请重新回零并重新标定或同步孔位（转盘页需重启软件后按新比值初始化）。",
+            "（默认 132/48=2.75）。理论孔位/同步/间隙换算已按新比值即时刷新"
+            "（已标定孔位保持不变）；请重新回零并重新标定或同步孔位。",
             "#E65100",
         )
 

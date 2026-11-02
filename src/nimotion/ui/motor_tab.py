@@ -29,16 +29,19 @@ class MotorTab(QWidget):
 
         # 右侧: 子 Tab
         self._sub_tabs = QTabWidget()
-        self._sub_tabs.addTab(
-            TurretPanel(self._motor), "物镜转换"
-        )
+        self._turret_panel = TurretPanel(self._motor)
+        self._sub_tabs.addTab(self._turret_panel, "物镜转换")
         self._sub_tabs.addTab(
             MotorControlPanel(self._motor), "运动控制"
         )
-        self._sub_tabs.addTab(
-            MotorParamsPanel(self._motor), "参数设置"
-        )
+        self._params_panel = MotorParamsPanel(self._motor)
+        self._sub_tabs.addTab(self._params_panel, "参数设置")
         self._sub_tabs.addTab(
             MotorAlarmPanel(self._motor), "报警信息"
         )
         layout.addWidget(self._sub_tabs, stretch=1)
+
+        # 齿轮变比修改后转盘页即时刷新(理论孔位/点动上限/间隙换算)，无需重启
+        self._params_panel.gear_config_changed.connect(
+            self._turret_panel.refresh_gear_ratio
+        )
